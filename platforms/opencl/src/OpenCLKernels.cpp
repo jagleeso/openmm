@@ -1627,7 +1627,10 @@ void OpenCLCalcNonbondedForceKernel::initialize(const System& system, const Nonb
                 sort = new OpenCLSort(cl, new SortTrait(), cl.getNumAtoms());
                 fft = new OpenCLFFT3D(cl, gridSizeX, gridSizeY, gridSizeZ);
                 string vendor = cl.getDevice().getInfo<CL_DEVICE_VENDOR>();
-                usePmeQueue = (vendor.size() >= 6 && vendor.substr(0, 6) == "NVIDIA");
+		// Force usePmeQueue = false to work around Bad State issue with some NVIDIA cards.
+		// TODO: Restore this after more debugging, or further restrict cards for which usePmeQueue = true.
+                // usePmeQueue = (vendor.size() >= 6 && vendor.substr(0, 6) == "NVIDIA");
+		usePmeQueue = false;
                 if (usePmeQueue) {
                     pmeDefines["USE_PME_STREAM"] = "1";
                     pmeQueue = cl::CommandQueue(cl.getContext(), cl.getDevice());
