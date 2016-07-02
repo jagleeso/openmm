@@ -9,7 +9,7 @@
  * Biological Structures at Stanford, funded under the NIH Roadmap for        *
  * Medical Research, grant U54 GM072970. See https://simtk.org.               *
  *                                                                            *
- * Portions copyright (c) 2008-2015 Stanford University and the Authors.      *
+ * Portions copyright (c) 2008-2016 Stanford University and the Authors.      *
  * Authors: Peter Eastman                                                     *
  * Contributors:                                                              *
  *                                                                            *
@@ -192,6 +192,7 @@ public:
      */
     void loadCheckpoint(ContextImpl& context, std::istream& stream);
 private:
+    class GetPositionsTask;
     CudaContext& cu;
 };
 
@@ -592,7 +593,7 @@ class CudaCalcNonbondedForceKernel : public CalcNonbondedForceKernel {
 public:
     CudaCalcNonbondedForceKernel(std::string name, const Platform& platform, CudaContext& cu, const System& system) : CalcNonbondedForceKernel(name, platform),
             cu(cu), hasInitializedFFT(false), sigmaEpsilon(NULL), exceptionParams(NULL), cosSinSums(NULL), directPmeGrid(NULL), reciprocalPmeGrid(NULL),
-            pmeBsplineModuliX(NULL), pmeBsplineModuliY(NULL), pmeBsplineModuliZ(NULL),  pmeAtomRange(NULL), pmeAtomGridIndex(NULL), sort(NULL), fft(NULL), pmeio(NULL) {
+            pmeBsplineModuliX(NULL), pmeBsplineModuliY(NULL), pmeBsplineModuliZ(NULL),  pmeAtomRange(NULL), pmeAtomGridIndex(NULL), pmeEnergyBuffer(NULL), sort(NULL), fft(NULL), pmeio(NULL) {
     }
     ~CudaCalcNonbondedForceKernel();
     /**
@@ -620,6 +621,15 @@ public:
      * @param force      the NonbondedForce to copy the parameters from
      */
     void copyParametersToContext(ContextImpl& context, const NonbondedForce& force);
+    /**
+     * Get the parameters being used for PME.
+     * 
+     * @param alpha   the separation parameter
+     * @param nx      the number of grid points along the X axis
+     * @param ny      the number of grid points along the Y axis
+     * @param nz      the number of grid points along the Z axis
+     */
+    void getPMEParameters(double& alpha, int& nx, int& ny, int& nz) const;
 private:
     class SortTrait : public CudaSort::SortTrait {
         int getDataSize() const {return 8;}
@@ -648,6 +658,7 @@ private:
     CudaArray* pmeBsplineModuliZ;
     CudaArray* pmeAtomRange;
     CudaArray* pmeAtomGridIndex;
+    CudaArray* pmeEnergyBuffer;
     CudaSort* sort;
     Kernel cpuPme;
     PmeIO* pmeio;
@@ -668,7 +679,9 @@ private:
     std::vector<std::pair<int, int> > exceptionAtoms;
     double ewaldSelfEnergy, dispersionCoefficient, alpha;
     int interpolateForceThreads;
+    int gridSizeX, gridSizeY, gridSizeZ;
     bool hasCoulomb, hasLJ, usePmeStream, useCudaFFT;
+    NonbondedMethod nonbondedMethod;
     static const int PmeOrder = 5;
 };
 
@@ -705,7 +718,7 @@ public:
      */
     void copyParametersToContext(ContextImpl& context, const CustomNonbondedForce& force);
 private:
-    void initInteractionGroups(const CustomNonbondedForce& force, const std::string& interactionSource);
+    void initInteractionGroups(const CustomNonbondedForce& force, const std::string& interactionSource, const std::vector<std::string>& tableTypes);
     CudaContext& cu;
     CudaParameterSet* params;
     CudaArray* globals;
@@ -923,6 +936,58 @@ private:
 };
 
 /**
+ * This kernel is invoked by CustomCentroidBondForce to calculate the forces acting on the system.
+ */
+class CudaCalcCustomCentroidBondForceKernel : public CalcCustomCentroidBondForceKernel {
+public:
+    CudaCalcCustomCentroidBondForceKernel(std::string name, const Platform& platform, CudaContext& cu, const System& system) : CalcCustomCentroidBondForceKernel(name, platform),
+            cu(cu), params(NULL), globals(NULL), groupParticles(NULL), groupWeights(NULL), groupOffsets(NULL), groupForces(NULL), bondGroups(NULL), centerPositions(NULL), system(system) {
+    }
+    ~CudaCalcCustomCentroidBondForceKernel();
+    /**
+     * Initialize the kernel.
+     *
+     * @param system     the System this kernel will be applied to
+     * @param force      the CustomCentroidBondForce this kernel will be used for
+     */
+    void initialize(const System& system, const CustomCentroidBondForce& force);
+    /**
+     * Execute the kernel to calculate the forces and/or energy.
+     *
+     * @param context        the context in which to execute this kernel
+     * @param includeForces  true if forces should be calculated
+     * @param includeEnergy  true if the energy should be calculated
+     * @return the potential energy due to the force
+     */
+    double execute(ContextImpl& context, bool includeForces, bool includeEnergy);
+    /**
+     * Copy changed parameters over to a context.
+     *
+     * @param context    the context to copy parameters to
+     * @param force      the CustomCentroidBondForce to copy the parameters from
+     */
+    void copyParametersToContext(ContextImpl& context, const CustomCentroidBondForce& force);
+
+private:
+    int numGroups, numBonds;
+    CudaContext& cu;
+    CudaParameterSet* params;
+    CudaArray* globals;
+    CudaArray* groupParticles;
+    CudaArray* groupWeights;
+    CudaArray* groupOffsets;
+    CudaArray* groupForces;
+    CudaArray* bondGroups;
+    CudaArray* centerPositions;
+    std::vector<std::string> globalParamNames;
+    std::vector<float> globalParamValues;
+    std::vector<CudaArray*> tabulatedFunctions;
+    std::vector<void*> groupForcesArgs;
+    CUfunction computeCentersKernel, groupForcesKernel, applyForcesKernel;
+    const System& system;
+};
+
+/**
  * This kernel is invoked by CustomCompoundBondForce to calculate the forces acting on the system.
  */
 class CudaCalcCustomCompoundBondForceKernel : public CalcCustomCompoundBondForceKernel {
@@ -1060,7 +1125,6 @@ public:
     double computeKineticEnergy(ContextImpl& context, const VerletIntegrator& integrator);
 private:
     CudaContext& cu;
-    double prevStepSize;
     CUfunction kernel1, kernel2;
 };
 
@@ -1291,10 +1355,10 @@ private:
     void recordChangedParameters(ContextImpl& context);
     bool evaluateCondition(int step);
     CudaContext& cu;
-    double prevStepSize, energy;
+    double energy;
     float energyFloat;
     int numGlobalVariables;
-    bool hasInitializedKernels, deviceValuesAreCurrent, deviceGlobalsAreCurrent, modifiesParameters, keNeedsForce;
+    bool hasInitializedKernels, deviceValuesAreCurrent, deviceGlobalsAreCurrent, modifiesParameters, keNeedsForce, hasAnyConstraints;
     mutable bool localValuesAreCurrent;
     CudaArray* globalValues;
     CudaArray* sumBuffer;
