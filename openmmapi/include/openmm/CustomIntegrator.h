@@ -627,6 +627,16 @@ protected:
      * Compute the kinetic energy of the system at the current time.
      */
     double computeKineticEnergy();
+    /**
+     * This is called while writing checkpoints.  It gives the integrator a chance to write
+     * its own data.
+     */
+    void createCheckpoint(std::ostream& stream) const;
+    /**
+     * This is called while loading a checkpoint.  The integrator should read in whatever
+     * data it wrote in createCheckpoint() and update its internal state accordingly.
+     */
+    void loadCheckpoint(std::istream& stream);
 private:
     class ComputationInfo;
     class FunctionInfo;
