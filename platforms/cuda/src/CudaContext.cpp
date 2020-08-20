@@ -110,7 +110,7 @@ CudaContext::CudaContext(const System& system, int deviceIndex, bool useBlocking
         time(0.0), platformData(platformData), stepCount(0), computeForceCount(0), stepsSinceReorder(99999), contextIsValid(false), atomsWereReordered(false), hasAssignedPosqCharges(false),
         hasCompilerKernel(false), isNvccAvailable(false), pinnedBuffer(NULL), integration(NULL), expression(NULL), bonded(NULL), nonbonded(NULL), thread(NULL) {
     // Determine what compiler to use.
-    
+
     this->compiler = "\""+compiler+"\"";
     if (platformData.context != NULL) {
         try {
@@ -236,6 +236,10 @@ CudaContext::CudaContext(const System& system, int deviceIndex, bool useBlocking
             minor = 3;
         }
     }
+    if (major > MAX_MAJOR_COMPUTE_CAPABILITY)
+        major = MAX_MAJOR_COMPUTE_CAPABILITY;
+    if (major == MAX_MAJOR_COMPUTE_CAPABILITY && minor > MAX_MINOR_COMPUTE_CAPABILITY)
+        minor = MAX_MINOR_COMPUTE_CAPABILITY;
     gpuArchitecture = intToString(major)+intToString(minor);
     computeCapability = major+0.1*minor;
 
@@ -1374,7 +1378,7 @@ void CudaContext::addPostComputation(ForcePostComputation* computation) {
 
 void CudaContext::addEnergyParameterDerivative(const string& param) {
     // See if this parameter has already been registered.
-    
+
     for (int i = 0; i < energyParamDerivNames.size(); i++)
         if (param == energyParamDerivNames[i])
             return;
