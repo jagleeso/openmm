@@ -30,6 +30,12 @@ SET(OPENMMCUDA_LIBRARY_NAME OpenMMCUDA)
 SET(SHARED_TARGET ${OPENMMCUDA_LIBRARY_NAME})
 SET(STATIC_TARGET ${OPENMMCUDA_LIBRARY_NAME}_static)
 
+SET(MAX_MAJOR_COMPUTE_CAPABILITY 7 CACHE STRING "Maximum major compute capability supported by the compiler")
+SET(MAX_MINOR_COMPUTE_CAPABILITY 0 CACHE STRING "Maximum minor compute capability supported by the compiler")
+
+ADD_DEFINITIONS(-DMAX_MAJOR_COMPUTE_CAPABILITY=${MAX_MAJOR_COMPUTE_CAPABILITY}
+                -DMAX_MINOR_COMPUTE_CAPABILITY=${MAX_MINOR_COMPUTE_CAPABILITY})
+
 
 # These are all the places to search for header files which are
 # to be part of the API.
