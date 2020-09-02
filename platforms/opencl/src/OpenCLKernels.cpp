@@ -2031,7 +2031,7 @@ void OpenCLCalcNonbondedForceKernel::initialize(const System& system, const Nonb
     }
     globalParams.initialize(cl, max((int) paramValues.size(), 1), cl.getUseDoublePrecision() ? sizeof(double) : sizeof(float), "globalParams");
     if (paramValues.size() > 0)
-        globalParams.upload(paramValues, true);
+        globalParams.upload(paramValues, true, true);
     recomputeParams = true;
     
     // Initialize the kernel for updating parameters.
