@@ -31,6 +31,7 @@
 
 #include "CudaCompilerKernels.h"
 #include "openmm/OpenMMException.h"
+#include <iostream>
 #include <sstream>
 #include <nvrtc.h>
 
@@ -72,7 +73,14 @@ string CudaRuntimeCompilerKernel::createModule(const string& source, const strin
             nvrtcGetProgramLogSize(program, &logSize);
             vector<char> log(logSize);
             nvrtcGetProgramLog(program, &log[0]);
-            throw OpenMMException("Error compiling program: "+string(&log[0]));
+            stringstream error;
+            error << "Error compiling program: " << string(&log[0]) << endl;
+            error << "Compilation flags: " << flags << endl;
+            error << "Device compute capability: " << cu.getComputeCapability() << endl;
+            int major, minor;
+            nvrtcVersion(&major, &minor);
+            error << "nvrtc version: " << major << "." << minor << endl;
+            throw OpenMMException(error.str());
         }
         size_t ptxSize;
         nvrtcGetPTXSize(program, &ptxSize);
