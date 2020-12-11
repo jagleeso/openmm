@@ -99,9 +99,9 @@ void testChangingIntegrator() {
         double expectedKE = 0.5*2*3*BOLTZ*300.0;
         ASSERT_USUALLY_EQUAL_TOL(expectedKE, ke/1000, 0.1);
         ASSERT_EQUAL_TOL(100*0.01+10100*0.011, context.getState(0).getTime(), 1e-5);
-        
+
         // Now reinitialize the context and repeat all of these tests to make sure that works correctly.
-        
+
         context.reinitialize();
         integrator.setCurrentIntegrator(0);
     }
@@ -114,9 +114,9 @@ void testChangingParameters() {
     integrator.addIntegrator(new VerletIntegrator(0.01));
     integrator.addIntegrator(new LangevinIntegrator(300.0, 10.0, 0.02));
     integrator.addIntegrator(new BrownianIntegrator(300.0, 10.0, 0.03));
-    
+
     // Try getting and setting the step size for different component integrators.
-    
+
     for (int i = 0; i < 3; i++) {
         integrator.setCurrentIntegrator(i);
         ASSERT_EQUAL_TOL(0.01*(i+1), integrator.getStepSize(), 1e-7);
@@ -130,9 +130,9 @@ void testChangingParameters() {
         integrator.setCurrentIntegrator(i);
         ASSERT_EQUAL_TOL(0.02*(i+1), integrator.getStepSize(), 1e-7);
     }
-    
+
     // Try getting and setting the constraint tolerance for different component integrators.
-    
+
     for (int i = 0; i < 3; i++) {
         integrator.setCurrentIntegrator(i);
         ASSERT_EQUAL_TOL(1e-5, integrator.getConstraintTolerance(), 1e-7);
@@ -179,7 +179,7 @@ void testDifferentStepSizes() {
         integrator.step(1);
         expectedTime += 0.005;
     }
-    
+
     // Now switch to the second Verlet integrator which has a different step size.
 
     integrator.setCurrentIntegrator(1);
@@ -193,7 +193,7 @@ void testDifferentStepSizes() {
         integrator.step(1);
         expectedTime += 0.01;
     }
-    
+
     // Finally, switch back to the first one again.
 
     integrator.setCurrentIntegrator(0);
@@ -225,13 +225,42 @@ void testCheckpoint() {
     custom->setGlobalVariable(0, 5.0);
     vector<Vec3> b1(1, Vec3(1, 2, 3));
     custom->setPerDofVariable(0, b1);
-    stringstream checkpoint; 
+    stringstream checkpoint;
     context.createCheckpoint(checkpoint);
     custom->setGlobalVariable(0, 10.0);
     vector<Vec3> b2(1, Vec3(4, 5, 6));
     custom->setPerDofVariable(0, b2);
     integrator.setCurrentIntegrator(1);
     context.loadCheckpoint(checkpoint);
+    ASSERT_EQUAL(0, integrator.getCurrentIntegrator());
+    ASSERT_EQUAL(5.0, custom->getGlobalVariable(0));
+    vector<Vec3> b3;
+    custom->getPerDofVariable(0, b3);
+    ASSERT_EQUAL_VEC(b1[0], b3[0], 1e-6);
+}
+
+void testSaveParameters() {
+    // Test that integrator variables get loaded correctly from States.
+    System system;
+    system.addParticle(1.0);
+    CustomIntegrator* custom = new CustomIntegrator(0.001);
+    custom->addGlobalVariable("a", 1.0);
+    custom->addPerDofVariable("b", 2.0);
+    CompoundIntegrator integrator;
+    integrator.addIntegrator(custom);
+    integrator.addIntegrator(new VerletIntegrator(0.005));
+    Context context(system, integrator, platform);
+    vector<Vec3> positions(1, Vec3());
+    context.setPositions(positions);
+    custom->setGlobalVariable(0, 5.0);
+    vector<Vec3> b1(1, Vec3(1, 2, 3));
+    custom->setPerDofVariable(0, b1);
+    State savedState = context.getState(State::IntegratorParameters);
+    custom->setGlobalVariable(0, 10.0);
+    vector<Vec3> b2(1, Vec3(4, 5, 6));
+    custom->setPerDofVariable(0, b2);
+    integrator.setCurrentIntegrator(1);
+    context.setState(savedState);
     ASSERT_EQUAL(0, integrator.getCurrentIntegrator());
     ASSERT_EQUAL(5.0, custom->getGlobalVariable(0));
     vector<Vec3> b3;
@@ -248,6 +277,7 @@ int main(int argc, char* argv[]) {
         testChangingParameters();
         testDifferentStepSizes();
         testCheckpoint();
+        testSaveParameters();
         runPlatformTests();
     }
     catch(const exception& e) {

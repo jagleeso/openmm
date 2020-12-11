@@ -72,6 +72,23 @@ OpenMM::NmPerAngstrom before passing them to OpenMM, and positions calculated by
 OpenMM should be multiplied by OpenMM::AngstromsPerNm before passing them back
 to your application.
 
+.. _physical-constants:
+
+Physical Constants
+******************
+
+OpenMM uses the CODATA 2018 values for all physical constants.  Here are the
+specific values it uses for the constants that frequently come up in molecular
+simulations.
+
+========================================  =================================
+Quantity                                  Value
+========================================  =================================
+Elementary Charge (:math:`e`)             1.602176634·10\ :sup:`-19` C
+Boltzmann's Constant (:math:`k_B`)        1.380649·10\ :sup:`-23` J/K
+Avogadro's Number (:math:`N_A`)           6.02214076·10\ :sup:`23`
+Vacuum Permittivity (:math:`\epsilon_0`)  8.8541878128·10\ :sup:`-12` F/m
+========================================  =================================
 
 
 Standard Forces
@@ -1278,6 +1295,8 @@ algorithm.  This can be used to implement algorithms such as lambda-dynamics,
 where a global parameter is integrated as a dynamic variable.
 
 
+.. _integrators-theory:
+
 Integrators
 ###########
 
@@ -1334,9 +1353,106 @@ components are chosen from a normal distribution with mean zero and variance
 :math:`2m_i \gamma k_B T`\ , where *T* is the temperature of
 the heat bath.
 
-The integration is done using a leap-frog method similar to VerletIntegrator.
-:cite:`Izaguirre2010` The same comments about the offset between positions and
-velocities apply to this integrator as to that one.
+The integration is done using the Langevin leap-frog method. :cite:`Izaguirre2010`
+In each step, the positions and velocities are updated as follows:
+
+
+.. math::
+   \mathbf{v}_{i}(t+\Delta t/2)=\mathbf{v}_{i}(t-\Delta t/2)\alpha+\mathbf{f}_{i}(t)(1-\alpha)/\gamma{m}_{i} + \sqrt{kT(1-\alpha^2)/m}R
+
+
+.. math::
+   \mathbf{r}_{i}(t+\Delta t)=\mathbf{r}_{i}(t)+\mathbf{v}_{i}(t+\Delta t/2)\Delta t
+
+
+where :math:`k` is Boltzmann's constant, :math:`T` is the temperature,
+:math:`\gamma` is the friction coefficient, :math:`R` is a normally distributed
+random number, and :math:`\alpha=\exp(-\gamma\Delta t)`.
+
+The same comments about the offset between positions and velocities apply to
+this integrator as to VerletIntegrator.
+
+LangevinMiddleIntegrator
+************************
+
+This integrator is similar to LangevinIntegerator, but it instead uses the LFMiddle
+discretization. :cite:`Zhang2019` In each step, the positions and velocities
+are updated as follows:
+
+
+.. math::
+   \mathbf{v}_{i}(t+\Delta t/2) = \mathbf{v}_{i}(t-\Delta t/2) + \mathbf{f}_{i}(t)\Delta t/{m}_{i}
+
+
+.. math::
+   \mathbf{r}_{i}(t+\Delta t/2) = \mathbf{r}_{i}(t) + \mathbf{v}_{i}(t+\Delta t/2)\Delta t/2
+
+
+.. math::
+   \mathbf{v'}_{i}(t+\Delta t/2) = \mathbf{v}_{i}(t+\Delta t/2)\alpha + \sqrt{kT(1-\alpha^2)/m}R
+
+
+.. math::
+   \mathbf{r}_{i}(t+\Delta t) = \mathbf{r}_{i}(t+\Delta t/2) + \mathbf{v'}_{i}(t+\Delta t/2)\Delta t/2
+
+
+This tends to produce more accurate sampling of configurational properties (such
+as free energies), but less accurate sampling of kinetic properties.  Because
+configurational properties are much more important than kinetic ones in most
+simulations, this integrator is generally preferred over LangevinIntegrator.  It
+often allows one to use a larger time step while still maintaining similar or
+better accuracy.
+
+One disadvantage of this integrator is that it requires applying constraints
+twice per time step, compared to only once for LangevinIntegrator.  This
+can make it slightly slower for systems that involve constraints.  However, this
+usually is more than compensated by allowing you to use a larger time step.
+
+.. _nosehoover-integrators-theory:
+
+NoseHooverIntegrator
+********************
+
+Like LangevinMiddleIntegerator, this uses the LFMiddle discretization.
+:cite:`Zhang2019` In each step, the positions and velocities are updated as
+follows:
+
+
+.. math::
+   \mathbf{v}_{i}(t+\Delta t/2) = \mathbf{v}_{i}(t-\Delta t/2) + \mathbf{f}_{i}(t)\Delta t/{m}_{i}
+
+
+.. math::
+   \mathbf{r}_{i}(t+\Delta t/2) = \mathbf{r}_{i}(t) + \mathbf{v}_{i}(t+\Delta t/2)\Delta t/2
+
+
+.. math::
+   \mathbf{v'}_{i}(t+\Delta t/2) = \mathrm{scale}\times\mathbf{v}_{i}(t+\Delta t/2)
+
+
+.. math::
+   \mathbf{r}_{i}(t+\Delta t) = \mathbf{r}_{i}(t+\Delta t/2) + \mathbf{v'}_{i}(t+\Delta t/2)\Delta t/2
+
+
+The universal scale factor used in the third step is determined by propagating
+auxilliary degrees of freedom alongside the regular particles.  The original
+Nosé-Hoover formulation used a single harmonic oscillator for the heat bath,
+but this is problematic in small or stiff systems, which are non-ergodic, so
+the chain formulation extends this by replacing the single oscillator
+thermostat with a chain of connected oscillators.  :cite:`Martyna1992`  For
+large systems a single oscillator (*i.e.* a chain length of one) will suffice,
+but longer chains are necessary to properly thermostat non-ergodic systems.
+The OpenMM default is to use a chain length of three to cover the latter case,
+but this can be safely reduced to increase efficiency in large systems.
+
+The heat bath propagation is performed using a multi-timestep algorithm.  Each
+propagation step is discretized into substeps using a factorization from
+Yoshida and Suzuki; the default discretization uses a :math:`\mathcal{O}(\Delta
+t^6)` approach that uses 7 points, but 1, 3 or 5 points may also be used to
+increase performace, at the expense of accuracy.  Each step is further
+subdivided into multi-timesteps with a default of 3 multi time steps per
+propagation; as with the number of Yoshida-Suziki points this value may be
+increase to increase accuracy but with additional computational expense.
 
 BrownianIntegrator
 ******************
@@ -1570,7 +1686,8 @@ Force Groups
 ************
 
 It is possible to split the Force objects in a System into groups.  Those groups
-can then be evaluated independently of each other.  Some Force classes also
+can then be evaluated independently of each other.  This is done by calling
+:code:`setForceGroup()` on the Force.  Some Force classes also
 provide finer grained control over grouping.  For example, NonbondedForce allows
 direct space computations to be in one group and reciprocal space computations
 in a different group.
@@ -1578,8 +1695,15 @@ in a different group.
 The most important use of force groups is for implementing multiple time step
 algorithms with CustomIntegrator.  For example, you might evaluate the slowly
 changing nonbonded interactions less frequently than the quickly changing bonded
-ones.  It also is useful if you want the ability to query a subset of the forces
-acting on the system.
+ones.  This can be done by putting the slow and fast forces into separate
+groups, then using a :class:`MTSIntegrator` or :class:`MTSLangevinIntegrator`
+that evaluates the groups at different frequencies.
+
+Another important use is to define forces that are not used when integrating
+the equations of motion, but can still be queried efficiently.  To do this,
+call :code:`setIntegrationForceGroups()` on the :class:`Integrator`.  Any groups
+omitted will be ignored during simulation, but can be queried at any time by
+calling :code:`getState()`.
 
 Virtual Sites
 *************

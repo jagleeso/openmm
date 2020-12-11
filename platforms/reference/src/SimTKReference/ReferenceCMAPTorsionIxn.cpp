@@ -1,5 +1,5 @@
 
-/* Portions copyright (c) 2010-2016 Stanford University and Simbios.
+/* Portions copyright (c) 2010-2020 Stanford University and Simbios.
  * Contributors: Peter Eastman
  *
  * Permission is hereby granted, free of charge, to any person obtaining

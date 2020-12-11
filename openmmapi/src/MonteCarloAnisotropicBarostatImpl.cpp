@@ -6,7 +6,7 @@
  * Biological Structures at Stanford, funded under the NIH Roadmap for        *
  * Medical Research, grant U54 GM072970. See https://simtk.org.               *
  *                                                                            *
- * Portions copyright (c) 2010-2019 Stanford University and the Authors.      *
+ * Portions copyright (c) 2010-2020 Stanford University and the Authors.      *
  * Authors: Peter Eastman, Lee-Ping Wang                                      *
  * Contributors:                                                              *
  *                                                                            *
@@ -69,12 +69,13 @@ void MonteCarloAnisotropicBarostatImpl::updateContextState(ContextImpl& context)
     if (!owner.getScaleX() && !owner.getScaleY() && !owner.getScaleZ())
         return;
     step = 0;
-    
+
     // Compute the current potential energy.
-    
-    double initialEnergy = context.getOwner().getState(State::Energy).getPotentialEnergy();
+
+    int groups = context.getIntegrator().getIntegrationForceGroups();
+    double initialEnergy = context.getOwner().getState(State::Energy, false, groups).getPotentialEnergy();
     double pressure;
-    
+
     // Choose which axis to modify at random.
     int axis;
     while (true) {
@@ -97,9 +98,9 @@ void MonteCarloAnisotropicBarostatImpl::updateContextState(ContextImpl& context)
             break;
         }
     }
-    
+
     // Modify the periodic box size.
-    
+
     Vec3 box[3];
     context.getPeriodicBoxVectors(box[0], box[1], box[2]);
     double volume = box[0][0]*box[1][1]*box[2][2];
@@ -111,15 +112,15 @@ void MonteCarloAnisotropicBarostatImpl::updateContextState(ContextImpl& context)
     context.getOwner().setPeriodicBoxVectors(Vec3(box[0][0]*lengthScale[0], box[0][1]*lengthScale[1], box[0][2]*lengthScale[2]),
                                              Vec3(box[1][0]*lengthScale[0], box[1][1]*lengthScale[1], box[1][2]*lengthScale[2]),
                                              Vec3(box[2][0]*lengthScale[0], box[2][1]*lengthScale[1], box[2][2]*lengthScale[2]));
-    
+
     // Compute the energy of the modified system.
-    
-    double finalEnergy = context.getOwner().getState(State::Energy).getPotentialEnergy();
+
+    double finalEnergy = context.getOwner().getState(State::Energy, false, groups).getPotentialEnergy();
     double kT = BOLTZ*context.getParameter(MonteCarloAnisotropicBarostat::Temperature());
     double w = finalEnergy-initialEnergy + pressure*deltaVolume - context.getMolecules().size()*kT*std::log(newVolume/volume);
     if (w > 0 && SimTKOpenMMUtilities::getUniformlyDistributedRandomNumber() > std::exp(-w/kT)) {
         // Reject the step.
-        
+
         kernel.getAs<ApplyMonteCarloBarostatKernel>().restoreCoordinates(context);
         context.getOwner().setPeriodicBoxVectors(box[0], box[1], box[2]);
         volume = newVolume;
@@ -155,4 +156,3 @@ std::vector<std::string> MonteCarloAnisotropicBarostatImpl::getKernelNames() {
     names.push_back(ApplyMonteCarloBarostatKernel::Name());
     return names;
 }
-

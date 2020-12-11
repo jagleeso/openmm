@@ -6,7 +6,7 @@ Simbios, the NIH National Center for Physics-Based Simulation of
 Biological Structures at Stanford, funded under the NIH Roadmap for
 Medical Research, grant U54 GM072970. See https://simtk.org.
 
-Portions copyright (c) 2012-2018 Stanford University and the Authors.
+Portions copyright (c) 2012-2020 Stanford University and the Authors.
 Authors: Peter Eastman
 Contributors:
 
@@ -719,6 +719,8 @@ class Modeller(object):
         automatically, this function will only add hydrogens.  It will never remove ones that are already present in the
         model, regardless of the specified pH.
 
+        In all cases, the positions of existing atoms (including existing hydrogens) are not modified.
+
         Definitions for standard amino acids and nucleotides are built in.  You can call loadHydrogenDefinitions() to load
         additional definitions for other residue types.
 
@@ -937,14 +939,16 @@ class Modeller(object):
 
         # The hydrogens were added at random positions.  Now perform an energy minimization to fix them up.
 
+        addedH = set(newIndices)  # keep track of Hs added
+
         if forcefield is not None:
             # Use the ForceField the user specified.
 
             system = forcefield.createSystem(newTopology, rigidWater=False, nonbondedMethod=CutoffNonPeriodic)
             atoms = list(newTopology.atoms())
             for i in range(system.getNumParticles()):
-                if atoms[i].element != elem.hydrogen:
-                    # This is a heavy atom, so make it immobile.
+                if i not in addedH:
+                    # Existing atom, make it immobile.
                     system.setParticleMass(i, 0)
         else:
             # Create a System that restrains the distance of each hydrogen from its parent atom
@@ -962,7 +966,7 @@ class Modeller(object):
             bondedTo = []
             for atom in newTopology.atoms():
                 nonbonded.addParticle([])
-                if atom.element != elem.hydrogen:
+                if atom.index not in addedH:  # make immobile
                     system.addParticle(0.0)
                 else:
                     system.addParticle(1.0)
@@ -1000,7 +1004,7 @@ class Modeller(object):
         del context
         return actualVariants
 
-    def addExtraParticles(self, forcefield):
+    def addExtraParticles(self, forcefield, ignoreExternalBonds=False):
         """Add missing extra particles to the model that are required by a force
         field.
 
@@ -1019,45 +1023,19 @@ class Modeller(object):
         ----------
         forcefield : ForceField
             the ForceField defining what extra particles should be present
+        ignoreExternalBonds : boolean=False
+            If true, ignore external bonds when matching residues to templates.
+            This is useful when the Topology represents one piece of a larger
+            molecule, so chains are not terminated properly.
         """
-        # Create copies of all residue templates that have had all extra points removed.
-
-        templatesNoEP = {}
-        for resName, template  in forcefield._templates.items():
-            if any(atom.element is None for atom in template.atoms):
-                index = 0
-                newIndex = {}
-                newTemplate = ForceField._TemplateData(resName)
-                for i, atom in enumerate(template.atoms):
-                    if atom.element is not None:
-                        newIndex[i] = index
-                        index += 1
-                        newAtom = ForceField._TemplateAtomData(atom.name, atom.type, atom.element)
-                        newAtom.externalBonds = atom.externalBonds
-                        newTemplate.atoms.append(newAtom)
-                for b1, b2 in template.bonds:
-                    if b1 in newIndex and b2 in newIndex:
-                        newTemplate.bonds.append((newIndex[b1], newIndex[b2]))
-                        newTemplate.atoms[newIndex[b1]].bondedTo.append(newIndex[b2])
-                        newTemplate.atoms[newIndex[b2]].bondedTo.append(newIndex[b1])
-                for b in template.externalBonds:
-                    if b in newIndex:
-                        newTemplate.externalBonds.append(newIndex[b])
-                templatesNoEP[template] = newTemplate
-
-        # Record which atoms are bonded to each other atom, with and without extra particles.
+        # Record which atoms are bonded to each other atom.
 
         bondedToAtom = []
-        bondedToAtomNoEP = []
         for atom in self.topology.atoms():
             bondedToAtom.append(set())
-            bondedToAtomNoEP.append(set())
         for atom1, atom2 in self.topology.bonds():
             bondedToAtom[atom1.index].add(atom2.index)
             bondedToAtom[atom2.index].add(atom1.index)
-            if atom1.element is not None and atom2.element is not None:
-                bondedToAtomNoEP[atom1.index].add(atom2.index)
-                bondedToAtomNoEP[atom2.index].add(atom1.index)
 
         # If the force field has a DrudeForce, record the types of Drude particles and their parents since we'll
         # need them for picking particle positions.
@@ -1067,6 +1045,10 @@ class Modeller(object):
             if isinstance(force, DrudeGenerator):
                 for type in force.typeMap:
                     drudeTypeMap[type] = force.typeMap[type][0]
+
+        # Identify the template to use for each residue.
+
+        templates = forcefield._matchAllResiduesToTemplates(ForceField._SystemData(self.topology), self.topology, {}, False, True, False)
 
         # Create the new Topology.
 
@@ -1079,16 +1061,8 @@ class Modeller(object):
             newChain = newTopology.addChain(chain.id)
             for residue in chain.residues():
                 newResidue = newTopology.addResidue(residue.name, newChain, residue.id, residue.insertionCode)
-
-                # Look for a matching template.
-
-                matchFound = False
-                signature = _createResidueSignature([atom.element for atom in residue.atoms()])
-                if signature in forcefield._templateSignatures:
-                    for t in forcefield._templateSignatures[signature]:
-                        if compiled.matchResidueToTemplate(residue, t, bondedToAtom, False) is not None:
-                            matchFound = True
-                if matchFound:
+                template = templates[residue.index]
+                if len(template.atoms) == len(list(residue.atoms())):
                     # Just copy the residue over.
 
                     for atom in residue.atoms():
@@ -1096,28 +1070,17 @@ class Modeller(object):
                         newAtoms[atom] = newAtom
                         newPositions.append(deepcopy(self.positions[atom.index]))
                 else:
-                    # There's no matching template.  Try to find one that matches based on everything except
-                    # extra points.
+                    # Record the corresponding atoms.
 
-                    template = None
-                    residueNoEP = Residue(residue.name, residue.index, residue.chain, residue.id, residue.insertionCode)
-                    residueNoEP._atoms = [atom for atom in residue.atoms() if atom.element is not None]
-                    if signature in forcefield._templateSignatures:
-                        for t in forcefield._templateSignatures[signature]:
-                            if t in templatesNoEP:
-                                matches = compiled.matchResidueToTemplate(residueNoEP, templatesNoEP[t], bondedToAtomNoEP, False)
-                                if matches is not None:
-                                    template = t;
-                                    # Record the corresponding atoms.
-                                    matchingAtoms = {}
-                                    for atom, match in zip(residueNoEP.atoms(), matches):
-                                        templateAtomName = templatesNoEP[t].atoms[match].name
-                                        for templateAtom in template.atoms:
-                                            if templateAtom.name == templateAtomName:
-                                                matchingAtoms[templateAtom] = atom
-                                    break
-                    if template is None:
-                        raise ValueError('Residue %d (%s) does not match any template defined by the ForceField.' % (residue.index+1, residue.name))
+                    matches = compiled.matchResidueToTemplate(residue, template, bondedToAtom, ignoreExternalBonds, True)
+                    atomsNoEP = [a for a in residue.atoms() if a.element is not None]
+                    templateAtomsNoEP = [a for a in template.atoms if a.element is not None]
+                    matchingAtoms = {}
+                    for atom, match in zip(atomsNoEP, matches):
+                        templateAtomName = templateAtomsNoEP[match].name
+                        for templateAtom in template.atoms:
+                            if templateAtom.name == templateAtomName:
+                                matchingAtoms[templateAtom] = atom
 
                     # Add the regular atoms.
 
@@ -1251,18 +1214,18 @@ class Modeller(object):
         adds whole copies of the pre-equilibrated membrane patch, so the box dimensions will always be
         integer multiples of the patch size.  That may lead to a larger membrane than what you requested.
 
-        This method has built in support for POPC and POPE lipids.  You can also build other types of
-        membranes by providing a pre-equilibrated, solvated membrane patch that can be tiled in the XY
-        plane to form the membrane.
+        This method has built in support for POPC, POPE, DLPC, DLPE, DMPC, DOPC and DPPC lipids.
+        You can also build other types of membranes by providing a pre-equilibrated, solvated membrane patch
+        that can be tiled in the XY plane to form the membrane.
 
         Parameters
         ----------
         forcefield : ForceField
             the ForceField to use for determining atomic charges and for relaxing the membrane
         lipidType : string or object
-            the type of lipid to use.  Supported string values are 'POPC' and 'POPE'.  For other types
-            of lipids, provide a PDBFile or PDBxFile object (or any other object with "topology" and
-            "positions" fields) containing a membrane patch.
+            the type of lipid to use.  Supported string values are 'POPC', 'POPE', 'DLPC', 'DLPE', 'DMPC',
+            'DOPC', and 'DPPC'.  For other types of lipids, provide a PDBFile or PDBxFile object (or any
+            other object with "topology" and "positions" fields) containing a membrane patch.
         membraneCenterZ: distance=0*nanometer
             the position along the Z axis of the center of the membrane
         minimumPadding : distance=1*nanometer
@@ -1281,7 +1244,7 @@ class Modeller(object):
         """
         if 'topology' in dir(lipidType) and 'positions' in dir(lipidType):
             patch = lipidType
-        elif lipidType.upper() in ('POPC', 'POPE'):
+        elif lipidType.upper() in ('POPC', 'POPE', 'DLPC', 'DLPE', 'DMPC', 'DOPC', 'DPPC'):
             patch = PDBFile(os.path.join(os.path.dirname(__file__), 'data', lipidType.upper()+'.pdb'))
         else:
             raise ValueError('Unsupported lipid type: '+lipidType)
@@ -1412,7 +1375,7 @@ class Modeller(object):
                 # Remove the same number of residues from each leaf.
                 skipFromLeaf[lipidLeaf[residue]] -= 1
             else:
-                newResidue = membraneTopology.addResidue(residue.name, lipidChain, lipidResNum, residue.insertionCode)
+                newResidue = membraneTopology.addResidue(residue.name, lipidChain, str(lipidResNum), residue.insertionCode)
                 lipidResNum += 1
 
                 for atom in residue.atoms():

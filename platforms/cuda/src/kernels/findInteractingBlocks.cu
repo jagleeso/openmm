@@ -60,7 +60,7 @@ extern "C" __global__ void sortBoxData(const real2* __restrict__ sortedBlock, co
         sortedBlockCenter[i] = blockCenter[index];
         sortedBlockBoundingBox[i] = blockBoundingBox[index];
     }
-    
+
     // Also check whether any atom has moved enough so that we really need to rebuild the neighbor list.
 
     bool rebuild = forceRebuild;
@@ -78,22 +78,23 @@ extern "C" __global__ void sortBoxData(const real2* __restrict__ sortedBlock, co
 
 __device__ int saveSinglePairs(int x, int* atoms, int* flags, int length, unsigned int maxSinglePairs, unsigned int* singlePairCount, int2* singlePairs, int* sumBuffer, volatile int& pairStartIndex) {
     // Record interactions that should be computed as single pairs rather than in blocks.
-    
+
     const int indexInWarp = threadIdx.x%32;
     int sum = 0;
     for (int i = indexInWarp; i < length; i += 32) {
         int count = __popc(flags[i]);
         sum += (count <= MAX_BITS_FOR_PAIRS ? count : 0);
     }
-    sumBuffer[indexInWarp] = sum;
-    for (int step = 1; step < 32; step *= 2) {
-        int add = (indexInWarp >= step ? sumBuffer[indexInWarp-step] : 0);
-        sumBuffer[indexInWarp] += add;
+    for (int i = 1; i < 32; i *= 2) {
+        int n = __shfl_up_sync(0xffffffff, sum, i);
+        if (indexInWarp >= i)
+            sum += n;
     }
-    int pairsToStore = sumBuffer[31];
-    if (indexInWarp == 0)
-        pairStartIndex = atomicAdd(singlePairCount, pairsToStore);
-    int pairIndex = pairStartIndex + (indexInWarp > 0 ? sumBuffer[indexInWarp-1] : 0);
+    if (indexInWarp == 31)
+        pairStartIndex = atomicAdd(singlePairCount,(unsigned int) sum);
+    __syncwarp();
+    int prevSum = __shfl_up_sync(0xffffffff, sum, 1);
+    int pairIndex = pairStartIndex + (indexInWarp > 0 ? prevSum : 0);
     for (int i = indexInWarp; i < length; i += 32) {
         int count = __popc(flags[i]);
         if (count <= MAX_BITS_FOR_PAIRS && pairIndex+count < maxSinglePairs) {
@@ -105,9 +106,9 @@ __device__ int saveSinglePairs(int x, int* atoms, int* flags, int length, unsign
             }
         }
     }
-    
+
     // Compact the remaining interactions.
-    
+
     const int warpMask = (1<<indexInWarp)-1;
     int numCompacted = 0;
     for (int start = 0; start < length; start += 32) {
@@ -132,10 +133,10 @@ __device__ int saveSinglePairs(int x, int* atoms, int* flags, int length, unsign
  *
  * STAGE 1:
  *
- * A coarse grained atom block against interacting atom block neighbour list is constructed. 
+ * A coarse grained atom block against interacting atom block neighbour list is constructed.
  *
- * Each warp first loads in some block X of interest. Each thread within the warp then loads 
- * in a different atom block Y. If Y has exclusions with X, then Y is not processed.  If the bounding boxes 
+ * Each warp first loads in some block X of interest. Each thread within the warp then loads
+ * in a different atom block Y. If Y has exclusions with X, then Y is not processed.  If the bounding boxes
  * of the two atom blocks are within the cutoff distance, then the two atom blocks are considered to be
  * interacting and Y is added to the buffer for X.
  *
@@ -169,7 +170,7 @@ __device__ int saveSinglePairs(int x, int* atoms, int* flags, int length, unsign
  *               block 2 is excluded from atom 1,3,5,6
  *              exclusionIndices[0][3][5][8]
  *           exclusionRowIndices[3][5][6][3][4][1][3][5][6]
- *                         index 0  1  2  3  4  5  6  7  8 
+ *                         index 0  1  2  3  4  5  6  7  8
  * [out] oldPos                - stores the positions of the atoms in which this neighbourlist was built on
  *                             - this is used to decide when to rebuild a neighbourlist
  * [in] rebuildNeighbourList   - whether or not to execute this kernel
@@ -204,10 +205,10 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
     volatile int& pairStartIndex = worksgroupPairStartIndex[warpStart/32];
 
     // Loop over blocks.
-    
+
     for (int block1 = startBlockIndex+warpIndex; block1 < startBlockIndex+numBlocks; block1 += totalWarps) {
         // Load data for this block.  Note that all threads in a warp are processing the same block.
-        
+
         real2 sortedKey = sortedBlocks[block1];
         int x = (int) sortedKey.y;
         real4 blockCenterX = sortedBlockCenter[block1];
@@ -221,14 +222,14 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
         if (singlePeriodicCopy) {
             // The box is small enough that we can just translate all the atoms into a single periodic
             // box, then skip having to apply periodic boundary conditions later.
-            
+
             APPLY_PERIODIC_TO_POS_WITH_CENTER(pos1, blockCenterX)
         }
 #endif
         posBuffer[threadIdx.x] = pos1;
 
         // Load exclusion data for block x.
-        
+
         const int exclusionStart = exclusionRowIndices[x];
         const int exclusionEnd = exclusionRowIndices[x+1];
         const int numExclusions = exclusionEnd-exclusionStart;
@@ -236,7 +237,7 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
             exclusionsForX[j] = exclusionIndices[exclusionStart+j];
         if (MAX_EXCLUSIONS > 32)
             __syncthreads();
-        
+
         // Loop over atom blocks to search for neighbors.  The threads in a warp compare block1 against 32
         // other blocks in parallel.
 
@@ -264,21 +265,21 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
                     includeBlock2 = forceInclude = true;
 #endif
                 if (includeBlock2) {
-                    unsigned short y = (unsigned short) sortedBlocks[block2].y;
+                    int y = (int) sortedBlocks[block2].y;
                     for (int k = 0; k < numExclusions; k++)
                         includeBlock2 &= (exclusionsForX[k] != y);
                 }
             }
-            
+
             // Loop over any blocks we identified as potentially containing neighbors.
-            
+
             int includeBlockFlags = BALLOT(includeBlock2);
             int forceIncludeFlags = BALLOT(forceInclude);
             while (includeBlockFlags != 0) {
                 int i = __ffs(includeBlockFlags)-1;
                 includeBlockFlags &= includeBlockFlags-1;
                 forceInclude = (forceIncludeFlags>>i) & 1;
-                unsigned short y = (unsigned short) sortedBlocks[block2Base+i].y;
+                int y = (int) sortedBlocks[block2Base+i].y;
 
                 // Check each atom in block Y for interactions.
 
@@ -317,9 +318,9 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
                     }
 #endif
                 }
-                
+
                 // Add any interacting atoms to the buffer.
-                
+
                 int includeAtomFlags = BALLOT(interacts);
                 if (interacts) {
                     int index = neighborsInBuffer+__popc(includeAtomFlags&warpMask);
@@ -329,7 +330,7 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
                 neighborsInBuffer += __popc(includeAtomFlags);
                 if (neighborsInBuffer > BUFFER_SIZE-TILE_SIZE) {
                     // Store the new tiles to memory.
-                    
+
 #if MAX_BITS_FOR_PAIRS > 0
                     neighborsInBuffer = saveSinglePairs(x, buffer, flagsBuffer, neighborsInBuffer, maxSinglePairs, &interactionCount[1], singlePairs, sumBuffer+warpStart, pairStartIndex);
 #endif
@@ -344,15 +345,16 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
                             for (int j = 0; j < tilesToStore; j++)
                                 interactingAtoms[(newTileStartIndex+j)*TILE_SIZE+indexInWarp] = buffer[indexInWarp+j*TILE_SIZE];
                         }
-                        buffer[indexInWarp] = buffer[indexInWarp+TILE_SIZE*tilesToStore];
+                        if (indexInWarp+TILE_SIZE*tilesToStore < BUFFER_SIZE)
+                            buffer[indexInWarp] = buffer[indexInWarp+TILE_SIZE*tilesToStore];
                         neighborsInBuffer -= TILE_SIZE*tilesToStore;
                     }
                 }
             }
         }
-        
+
         // If we have a partially filled buffer,  store it to memory.
-        
+
 #if MAX_BITS_FOR_PAIRS > 0
         if (neighborsInBuffer > 32)
             neighborsInBuffer = saveSinglePairs(x, buffer, flagsBuffer, neighborsInBuffer, maxSinglePairs, &interactionCount[1], singlePairs, sumBuffer+warpStart, pairStartIndex);
@@ -370,9 +372,9 @@ extern "C" __global__ void findBlocksWithInteractions(real4 periodicBoxSize, rea
             }
         }
     }
-    
+
     // Record the positions the neighbor list is based on.
-    
+
     for (int i = threadIdx.x+blockIdx.x*blockDim.x; i < NUM_ATOMS; i += blockDim.x*gridDim.x)
         oldPositions[i] = posq[i];
 }

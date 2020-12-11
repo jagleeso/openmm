@@ -6,7 +6,7 @@ Simbios, the NIH National Center for Physics-Based Simulation of
 Biological Structures at Stanford, funded under the NIH Roadmap for
 Medical Research, grant U54 GM072970. See https://simtk.org.
 
-Portions copyright (c) 2012-2015 Stanford University and the Authors.
+Portions copyright (c) 2012-2020 Stanford University and the Authors.
 Authors: Peter Eastman
 Contributors:
 
@@ -183,9 +183,9 @@ class Simulation(object):
         nextReport = [None]*len(self.reporters)
         while self.currentStep < endStep and (endTime is None or datetime.now() < endTime):
             nextSteps = endStep-self.currentStep
-            
+
             # Find when the next report will happen.
-            
+
             anyReport = False
             for i, reporter in enumerate(self.reporters):
                 nextReport[i] = reporter.describeNextReport(self)
@@ -197,17 +197,16 @@ class Simulation(object):
                 self.integrator.step(10) # Only take 10 steps at a time, to give Python more chances to respond to a control-c.
                 self.currentStep += 10
                 stepsToGo -= 10
+                self.currentStep += 10
                 if endTime is not None and datetime.now() >= endTime:
-                    break
-            else:
-                self.integrator.step(stepsToGo)
-                self.currentStep += stepsToGo
-                stepsToGo = 0
-            if anyReport and stepsToGo == 0:
+                    return
+            self.integrator.step(stepsToGo)
+            self.currentStep += stepsToGo
+            if anyReport:
                 # One or more reporters are ready to generate reports.  Organize them into three
                 # groups: ones that want wrapped positions, ones that want unwrapped positions,
                 # and ones that don't care about positions.
-                
+
                 wrapped = []
                 unwrapped = []
                 either = []
@@ -229,14 +228,14 @@ class Simulation(object):
                     wrapped += either
                 else:
                     unwrapped += either
-                
+
                 # Generate the reports.
 
                 if len(wrapped) > 0:
                     self._generate_reports(wrapped, True)
                 if len(unwrapped) > 0:
                     self._generate_reports(unwrapped, False)
-    
+
     def _generate_reports(self, reports, periodic):
         getPositions = False
         getVelocities = False
@@ -252,7 +251,8 @@ class Simulation(object):
             if next[4]:
                 getEnergy = True
         state = self.context.getState(getPositions=getPositions, getVelocities=getVelocities, getForces=getForces,
-                                      getEnergy=getEnergy, getParameters=True, enforcePeriodicBox=periodic)
+                                      getEnergy=getEnergy, getParameters=True, enforcePeriodicBox=periodic,
+                                      groups=self.context.getIntegrator().getIntegrationForceGroups())
         for reporter, next in reports:
             reporter.report(self, state)
 
@@ -313,7 +313,7 @@ class Simulation(object):
             a File-like object to write the state to, or alternatively a
             filename
         """
-        state = self.context.getState(getPositions=True, getVelocities=True, getParameters=True)
+        state = self.context.getState(getPositions=True, getVelocities=True, getParameters=True, getIntegratorParameters=True)
         xml = mm.XmlSerializer.serialize(state)
         if isinstance(file, str):
             with open(file, 'w') as f:

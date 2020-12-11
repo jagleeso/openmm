@@ -6,7 +6,7 @@
  * Biological Structures at Stanford, funded under the NIH Roadmap for        *
  * Medical Research, grant U54 GM072970. See https://simtk.org.               *
  *                                                                            *
- * Portions copyright (c) 2009-2018 Stanford University and the Authors.      *
+ * Portions copyright (c) 2009-2020 Stanford University and the Authors.      *
  * Authors: Peter Eastman                                                     *
  * Contributors:                                                              *
  *                                                                            *
@@ -27,6 +27,7 @@
 #include "openmm/OpenMMException.h"
 #include "OpenCLNonbondedUtilities.h"
 #include "OpenCLArray.h"
+#include "OpenCLContext.h"
 #include "OpenCLKernelSources.h"
 #include "OpenCLExpressionUtilities.h"
 #include "OpenCLSort.h"
@@ -124,8 +125,18 @@ void OpenCLNonbondedUtilities::addInteraction(bool usesCutoff, bool usesPeriodic
     }
 }
 
+void OpenCLNonbondedUtilities::addParameter(ComputeParameterInfo parameter) {
+    parameters.push_back(ParameterInfo(parameter.getName(), parameter.getComponentType(), parameter.getNumComponents(),
+            parameter.getSize(), context.unwrap(parameter.getArray()).getDeviceBuffer()));
+}
+
 void OpenCLNonbondedUtilities::addParameter(const ParameterInfo& parameter) {
     parameters.push_back(parameter);
+}
+
+void OpenCLNonbondedUtilities::addArgument(ComputeParameterInfo parameter) {
+    arguments.push_back(ParameterInfo(parameter.getName(), parameter.getComponentType(), parameter.getNumComponents(),
+            parameter.getSize(), context.unwrap(parameter.getArray()).getDeviceBuffer()));
 }
 
 void OpenCLNonbondedUtilities::addArgument(const ParameterInfo& parameter) {
@@ -166,13 +177,13 @@ void OpenCLNonbondedUtilities::requestExclusions(const vector<vector<int> >& exc
     }
 }
 
-static bool compareUshort2(mm_ushort2 a, mm_ushort2 b) {
+static bool compareInt2(mm_int2 a, mm_int2 b) {
     // This version is used on devices with SIMD width of 32 or less.  It sorts tiles to improve cache efficiency.
 
     return ((a.y < b.y) || (a.y == b.y && a.x < b.x));
 }
 
-static bool compareUshort2LargeSIMD(mm_ushort2 a, mm_ushort2 b) {
+static bool compareInt2LargeSIMD(mm_int2 a, mm_int2 b) {
     // This version is used on devices with SIMD width greater than 32.  It puts diagonal tiles before off-diagonal
     // ones to reduce thread divergence.
     
@@ -212,15 +223,15 @@ void OpenCLNonbondedUtilities::initialize(const System& system) {
             tilesWithExclusions.insert(make_pair(max(x, y), min(x, y)));
         }
     }
-    vector<mm_ushort2> exclusionTilesVec;
+    vector<mm_int2> exclusionTilesVec;
     for (set<pair<int, int> >::const_iterator iter = tilesWithExclusions.begin(); iter != tilesWithExclusions.end(); ++iter)
-        exclusionTilesVec.push_back(mm_ushort2((unsigned short) iter->first, (unsigned short) iter->second));
-    sort(exclusionTilesVec.begin(), exclusionTilesVec.end(), context.getSIMDWidth() <= 32 ? compareUshort2 : compareUshort2LargeSIMD);
-    exclusionTiles.initialize<mm_ushort2>(context, exclusionTilesVec.size(), "exclusionTiles");
+        exclusionTilesVec.push_back(mm_int2(iter->first, iter->second));
+    sort(exclusionTilesVec.begin(), exclusionTilesVec.end(), context.getSIMDWidth() <= 32 ? compareInt2 : compareInt2LargeSIMD);
+    exclusionTiles.initialize<mm_int2>(context, exclusionTilesVec.size(), "exclusionTiles");
     exclusionTiles.upload(exclusionTilesVec);
     map<pair<int, int>, int> exclusionTileMap;
     for (int i = 0; i < (int) exclusionTilesVec.size(); i++) {
-        mm_ushort2 tile = exclusionTilesVec[i];
+        mm_int2 tile = exclusionTilesVec[i];
         exclusionTileMap[make_pair(tile.x, tile.y)] = i;
     }
     vector<vector<int> > exclusionBlocksForBlock(numAtomBlocks);
@@ -429,9 +440,9 @@ void OpenCLNonbondedUtilities::setAtomBlockRange(double startFraction, double en
     int numAtomBlocks = context.getNumAtomBlocks();
     startBlockIndex = (int) (startFraction*numAtomBlocks);
     numBlocks = (int) (endFraction*numAtomBlocks)-startBlockIndex;
-    int totalTiles = context.getNumAtomBlocks()*(context.getNumAtomBlocks()+1)/2;
+    long long totalTiles = context.getNumAtomBlocks()*((long long)context.getNumAtomBlocks()+1)/2;
     startTileIndex = (int) (startFraction*totalTiles);;
-    numTiles = (int) (endFraction*totalTiles)-startTileIndex;
+    numTiles = (long long) (endFraction*totalTiles)-startTileIndex;
     if (useCutoff) {
         // We are using a cutoff, and the kernels have already been created.
 
@@ -439,15 +450,15 @@ void OpenCLNonbondedUtilities::setAtomBlockRange(double startFraction, double en
             KernelSet& kernels = iter->second;
             if (*reinterpret_cast<cl_kernel*>(&kernels.forceKernel) != NULL) {
                 kernels.forceKernel.setArg<cl_uint>(5, startTileIndex);
-                kernels.forceKernel.setArg<cl_uint>(6, numTiles);
+                kernels.forceKernel.setArg<cl_ulong>(6, numTiles);
             }
             if (*reinterpret_cast<cl_kernel*>(&kernels.energyKernel) != NULL) {
                 kernels.energyKernel.setArg<cl_uint>(5, startTileIndex);
-                kernels.energyKernel.setArg<cl_uint>(6, numTiles);
+                kernels.energyKernel.setArg<cl_ulong>(6, numTiles);
             }
             if (*reinterpret_cast<cl_kernel*>(&kernels.forceEnergyKernel) != NULL) {
                 kernels.forceEnergyKernel.setArg<cl_uint>(5, startTileIndex);
-                kernels.forceEnergyKernel.setArg<cl_uint>(6, numTiles);
+                kernels.forceEnergyKernel.setArg<cl_ulong>(6, numTiles);
             }
             kernels.findInteractingBlocksKernel.setArg<cl_uint>(10, startBlockIndex);
             kernels.findInteractingBlocksKernel.setArg<cl_uint>(11, numBlocks);
@@ -629,6 +640,15 @@ cl::Kernel OpenCLNonbondedUtilities::createInteractionKernel(const string& sourc
         }
     }
     replacements["LOAD_ATOM2_PARAMETERS"] = load2j.str();
+    stringstream clearLocal;
+    for (int i = 0; i < (int) params.size(); i++) {
+        if (params[i].getNumComponents() == 1)
+            clearLocal<<"localData[localAtomIndex]."<<params[i].getName()<<" = 0;\n";
+        else
+            for (int j = 0; j < params[i].getNumComponents(); ++j)
+                clearLocal<<"localData[localAtomIndex]."<<params[i].getName()<<"_"<<suffixes[j]<<" = 0;\n";
+    }
+    replacements["CLEAR_LOCAL_PARAMETERS"] = clearLocal.str();
     stringstream initDerivs;
     for (int i = 0; i < energyParameterDerivatives.size(); i++)
         initDerivs<<"mixed energyParamDeriv"<<i<<" = 0;\n";
@@ -700,7 +720,7 @@ cl::Kernel OpenCLNonbondedUtilities::createInteractionKernel(const string& sourc
     kernel.setArg<cl::Buffer>(index++, exclusions.getDeviceBuffer());
     kernel.setArg<cl::Buffer>(index++, exclusionTiles.getDeviceBuffer());
     kernel.setArg<cl_uint>(index++, startTileIndex);
-    kernel.setArg<cl_uint>(index++, numTiles);
+    kernel.setArg<cl_ulong>(index++, numTiles);
     if (useCutoff) {
         kernel.setArg<cl::Buffer>(index++, interactingTiles.getDeviceBuffer());
         kernel.setArg<cl::Buffer>(index++, interactionCount.getDeviceBuffer());

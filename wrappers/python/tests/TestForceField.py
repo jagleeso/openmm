@@ -165,12 +165,12 @@ class TestForceField(unittest.TestCase):
 
         topology = self.pdb1.topology
         for constraints_value in [None, HBonds, AllBonds, HAngles]:
-            for rigidWater_value in [True, False]:
+            for rigidWater_value in [True, False, None]:
                 system = self.forcefield1.createSystem(topology,
                                                        constraints=constraints_value,
                                                        rigidWater=rigidWater_value)
                 validateConstraints(self, topology, system,
-                                    constraints_value, rigidWater_value)
+                                    constraints_value, rigidWater_value != False)
 
     def test_flexibleConstraints(self):
         """ Test the flexibleConstraints keyword """
@@ -250,6 +250,34 @@ class TestForceField(unittest.TestCase):
         totalMass1 = sum([system1.getParticleMass(i) for i in range(system1.getNumParticles())]).value_in_unit(amu)
         totalMass2 = sum([system2.getParticleMass(i) for i in range(system2.getNumParticles())]).value_in_unit(amu)
         self.assertAlmostEqual(totalMass1, totalMass2)
+
+    def test_DrudeMass(self):
+        """Test that setting the mass of Drude particles works correctly."""
+
+        forcefield = ForceField('charmm_polar_2013.xml')
+        pdb = PDBFile('systems/ala_ala_ala.pdb')
+        modeller = Modeller(pdb.topology, pdb.positions)
+        modeller.addExtraParticles(forcefield)
+        system = forcefield.createSystem(modeller.topology, drudeMass=0)
+        trueMass = [system.getParticleMass(i) for i in range(system.getNumParticles())]
+        drudeMass = 0.3*amu
+        system = forcefield.createSystem(modeller.topology, drudeMass=drudeMass)
+        adjustedMass = [system.getParticleMass(i) for i in range(system.getNumParticles())]
+        drudeForce = [f for f in system.getForces() if isinstance(f, DrudeForce)][0]
+        drudeParticles = set()
+        parentParticles = set()
+        for i in range(drudeForce.getNumParticles()):
+            params = drudeForce.getParticleParameters(i)
+            drudeParticles.add(params[0])
+            parentParticles.add(params[1])
+        for i in range(system.getNumParticles()):
+            if i in drudeParticles:
+                self.assertEqual(0*amu, trueMass[i])
+                self.assertEqual(drudeMass, adjustedMass[i])
+            elif i in parentParticles:
+                self.assertEqual(trueMass[i]-drudeMass, adjustedMass[i])
+            else:
+                self.assertEqual(trueMass[i], adjustedMass[i])
 
     def test_Forces(self):
         """Compute forces and compare them to ones generated with a previous version of OpenMM to ensure they haven't changed."""
@@ -477,7 +505,7 @@ class TestForceField(unittest.TestCase):
         self.assertEqual(unmatched_residues[0].chain.id, 'X')
         self.assertEqual(unmatched_residues[0].id, '1')
 
-    def test_ggenerateTemplatesForUnmatchedResidues(self):
+    def test_generateTemplatesForUnmatchedResidues(self):
         """Test generation of blank forcefield residue templates for unmatched residues."""
         #
         # Test where we generate parameters for only a ligand.
@@ -963,6 +991,102 @@ class TestForceField(unittest.TestCase):
             forcefield = ForceField(ff)
             system = forcefield.createSystem(pdb.topology)
 
+    def test_IdenticalTemplates(self):
+        """Test a case where patches produce two identical templates."""
+        ff = ForceField('charmm36.xml')
+        pdb = PDBFile(StringIO("""
+ATOM      1  N   HIS     1A   -2.670    -0.476   0.475  1.00  0.00           N
+ATOM      2  HT1 HIS     1A   -2.645    -1.336   1.036  1.00  0.00           H
+ATOM      3  HT2 HIS     1A   -2.859    -0.751  -0.532  1.00  0.00           H
+ATOM      4  HT3 HIS     1A   -3.415     0.201   0.731  1.00  0.00           H
+ATOM      5  CA  HIS     1A   -1.347     0.163   0.471  1.00  0.00           C
+ATOM      6  HA  HIS     1A   -1.111     0.506   1.479  1.00  0.00           H
+ATOM      7  CB  HIS     1A   -0.352    -0.857  -0.040  1.00  0.00           C
+ATOM      8  HB1 HIS     1A   -0.360    -1.741   0.636  1.00  0.00           H
+ATOM      9  HB2 HIS     1A   -0.640    -1.175  -1.046  1.00  0.00           H
+ATOM     10  CG  HIS     1A    1.003    -0.275  -0.063  1.00  0.00           C
+ATOM     11  CD2 HIS     1A    2.143    -0.931  -0.476  1.00  0.00           C
+ATOM     12  HD2 HIS     1A    2.217    -1.952  -0.840  1.00  0.00           H
+ATOM     13  NE2 HIS     1A    3.137    -0.024  -0.328  1.00  0.00           N
+ATOM     14  HE2 HIS     1A    4.132    -0.238  -0.565  1.00  0.00           H
+ATOM     15  CE1 HIS     1A    2.649     1.130   0.150  1.00  0.00           C
+ATOM     16  HE1 HIS     1A    3.233     2.020   0.360  1.00  0.00           H
+ATOM     17  ND1 HIS     1A    1.323     0.973   0.314  1.00  0.00           N
+ATOM     18  C   HIS     1A   -1.465     1.282  -0.497  1.00  0.00           C
+ATOM     19  OT1 HIS     1A   -2.108     2.309  -0.180  1.00  0.00           O
+ATOM     20  OT2 HIS     1A   -0.864     1.172  -1.737  1.00  0.00           O
+END"""))
+        # If the check is not done correctly, this will throw an exception.
+        ff.createSystem(pdb.topology)
+
+    def test_CharmmPolar(self):
+        """Test the CHARMM polarizable force field."""
+        pdb = PDBFile('systems/ala_ala_ala_drude.pdb')
+        pdb.topology.setUnitCellDimensions(Vec3(3, 3, 3))
+        ff = ForceField('charmm_polar_2019.xml')
+        system = ff.createSystem(pdb.topology, nonbondedMethod=PME, nonbondedCutoff=1.2*nanometers)
+        for i,f in enumerate(system.getForces()):
+            f.setForceGroup(i)
+            if isinstance(f, NonbondedForce):
+                f.setPMEParameters(3.4, 64, 64, 64)
+        integrator = DrudeLangevinIntegrator(300, 1.0, 1.0, 10.0, 0.001)
+        context = Context(system, integrator, Platform.getPlatformByName('Reference'))
+        context.setPositions(pdb.positions)
+
+        # Compare the energy to values computed by CHARMM.  Here is what it outputs:
+
+        # ENER ENR:  Eval#     ENERgy      Delta-E         GRMS
+        # ENER INTERN:          BONDs       ANGLes       UREY-b    DIHEdrals    IMPRopers
+        # ENER CROSS:           CMAPs        PMF1D        PMF2D        PRIMO
+        # ENER EXTERN:        VDWaals         ELEC       HBONds          ASP         USER
+        # ENER EWALD:          EWKSum       EWSElf       EWEXcl       EWQCor       EWUTil
+        #  ----------       ---------    ---------    ---------    ---------    ---------
+        # ENER>        0    102.83992      0.00000     13.06415
+        # ENER INTERN>       54.72574     40.21459     11.61009     26.10373      0.14113
+        # ENER CROSS>        -3.37113      0.00000      0.00000      0.00000
+        # ENER EXTERN>       22.74761    -24.21667      0.00000      0.00000      0.00000
+        # ENER EWALD>        56.14258  -7279.07968   7197.82192      0.00000      0.00000
+        #  ----------       ---------    ---------    ---------    ---------    ---------
+
+        # First check the total energy.
+        
+        energy = context.getState(getEnergy=True).getPotentialEnergy().value_in_unit(kilocalories_per_mole)
+        self.assertAlmostEqual(102.83992, energy, delta=energy*1e-3)
+
+        # Now check individual components.  CHARMM and OpenMM split them up a little differently.  I've tried to
+        # match things up, but I think there's still some inconsistency in where forces related to Drude particles
+        # are categorized.  That's why the Coulomb and bonds terms match less accurately than the other terms
+        # (and less accurately than the total energy, which agrees well).
+
+        coulomb = 0
+        vdw = 0
+        bonds = 0
+        angles = 0
+        propers = 0
+        impropers = 0
+        cmap = 0
+        for i,f in enumerate(system.getForces()):
+            energy = context.getState(getEnergy=True, groups={i}).getPotentialEnergy().value_in_unit(kilocalories_per_mole)
+            if isinstance(f, NonbondedForce):
+                coulomb += energy
+            elif isinstance(f, CustomNonbondedForce) or isinstance(f, CustomBondForce):
+                vdw += energy
+            elif isinstance(f, HarmonicBondForce) or isinstance(f, DrudeForce):
+                bonds += energy
+            elif isinstance(f, HarmonicAngleForce):
+                angles += energy
+            elif isinstance(f, PeriodicTorsionForce):
+                propers += energy
+            elif isinstance(f, CustomTorsionForce):
+                impropers += energy
+            elif isinstance(f, CMAPTorsionForce):
+                cmap += energy
+        self.assertAlmostEqual(-24.21667+56.14258-7279.07968+7197.82192, coulomb, delta=abs(coulomb)*5e-2) # ELEC+EWKSum+EWSElf+EWEXcl
+        self.assertAlmostEqual(22.74761, vdw, delta=vdw*1e-3) # VDWaals
+        self.assertAlmostEqual(54.72574+11.61009, bonds, delta=bonds*2e-2) # BONDs+UREY-b
+        self.assertAlmostEqual(40.21459, angles, delta=angles*1e-3) # ANGLes
+        self.assertAlmostEqual(26.10373, propers, delta=propers*1e-3) # DIHEdrals
+        self.assertAlmostEqual(0.14113, impropers, delta=impropers*1e-3) # IMPRopers
 
 class AmoebaTestForceField(unittest.TestCase):
     """Test the ForceField.createSystem() method with the AMOEBA forcefield."""
@@ -1034,6 +1158,15 @@ class AmoebaTestForceField(unittest.TestCase):
         self.assertAlmostEqual(constraints[(0,1)], hoDist)
         self.assertAlmostEqual(constraints[(0,2)], hoDist)
         self.assertAlmostEqual(constraints[(1,2)], hohDist)
+        
+        # Check that all values of rigidWater are interpreted correctly.
+        
+        numWaters = 215
+        self.assertEqual(3*numWaters, system.getNumConstraints())
+        system = self.forcefield1.createSystem(self.pdb1.topology, rigidWater=False)
+        self.assertEqual(0, system.getNumConstraints())
+        system = self.forcefield1.createSystem(self.pdb1.topology, rigidWater=None)
+        self.assertEqual(0, system.getNumConstraints())
 
     def test_Forces(self):
         """Compute forces and compare them to ones generated with a previous version of OpenMM to ensure they haven't changed."""

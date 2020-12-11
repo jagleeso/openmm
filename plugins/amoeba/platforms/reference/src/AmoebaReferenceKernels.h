@@ -9,7 +9,7 @@
  * Biological Structures at Stanford, funded under the NIH Roadmap for        *
  * Medical Research, grant U54 GM072970. See https://simtk.org.               *
  *                                                                            *
- * Portions copyright (c) 2008-2018 Stanford University and the Authors.      *
+ * Portions copyright (c) 2008-2020 Stanford University and the Authors.      *
  * Authors:                                                                   *
  * Contributors:                                                              *
  *                                                                            *
@@ -33,6 +33,7 @@
 #include "openmm/HippoNonbondedForce.h"
 #include "AmoebaReferenceMultipoleForce.h"
 #include "AmoebaReferenceHippoNonbondedForce.h"
+#include "AmoebaReferenceVdwForce.h"
 #include "ReferenceNeighborList.h"
 #include "SimTKOpenMMRealType.h"
 
@@ -43,7 +44,7 @@ namespace OpenMM {
  */
 class ReferenceCalcAmoebaBondForceKernel : public CalcAmoebaBondForceKernel {
 public:
-    ReferenceCalcAmoebaBondForceKernel(std::string name, 
+    ReferenceCalcAmoebaBondForceKernel(const std::string& name,
                                                const Platform& platform,
                                                const System& system);
     ~ReferenceCalcAmoebaBondForceKernel();
@@ -87,7 +88,7 @@ private:
  */
 class ReferenceCalcAmoebaAngleForceKernel : public CalcAmoebaAngleForceKernel {
 public:
-    ReferenceCalcAmoebaAngleForceKernel(std::string name, const Platform& platform, const System& system);
+    ReferenceCalcAmoebaAngleForceKernel(const std::string& name, const Platform& platform, const System& system);
     ~ReferenceCalcAmoebaAngleForceKernel();
     /**
      * Initialize the kernel.
@@ -132,7 +133,7 @@ private:
  */
 class ReferenceCalcAmoebaInPlaneAngleForceKernel : public CalcAmoebaInPlaneAngleForceKernel {
 public:
-    ReferenceCalcAmoebaInPlaneAngleForceKernel(std::string name, const Platform& platform, const System& system);
+    ReferenceCalcAmoebaInPlaneAngleForceKernel(const std::string& name, const Platform& platform, const System& system);
     ~ReferenceCalcAmoebaInPlaneAngleForceKernel();
     /**
      * Initialize the kernel.
@@ -178,7 +179,7 @@ private:
  */
 class ReferenceCalcAmoebaPiTorsionForceKernel : public CalcAmoebaPiTorsionForceKernel {
 public:
-    ReferenceCalcAmoebaPiTorsionForceKernel(std::string name, const Platform& platform, const System& system);
+    ReferenceCalcAmoebaPiTorsionForceKernel(const std::string& name, const Platform& platform, const System& system);
     ~ReferenceCalcAmoebaPiTorsionForceKernel();
     /**
      * Initialize the kernel.
@@ -221,7 +222,7 @@ private:
  */
 class ReferenceCalcAmoebaStretchBendForceKernel : public CalcAmoebaStretchBendForceKernel {
 public:
-    ReferenceCalcAmoebaStretchBendForceKernel(std::string name, const Platform& platform, const System& system);
+    ReferenceCalcAmoebaStretchBendForceKernel(const std::string& name, const Platform& platform, const System& system);
     ~ReferenceCalcAmoebaStretchBendForceKernel();
     /**
      * Initialize the kernel.
@@ -265,7 +266,7 @@ private:
  */
 class ReferenceCalcAmoebaOutOfPlaneBendForceKernel : public CalcAmoebaOutOfPlaneBendForceKernel {
 public:
-    ReferenceCalcAmoebaOutOfPlaneBendForceKernel(std::string name, const Platform& platform, const System& system);
+    ReferenceCalcAmoebaOutOfPlaneBendForceKernel(const std::string& name, const Platform& platform, const System& system);
     ~ReferenceCalcAmoebaOutOfPlaneBendForceKernel();
     /**
      * Initialize the kernel.
@@ -310,7 +311,7 @@ private:
  */
 class ReferenceCalcAmoebaTorsionTorsionForceKernel : public CalcAmoebaTorsionTorsionForceKernel {
 public:
-    ReferenceCalcAmoebaTorsionTorsionForceKernel(std::string name, const Platform& platform, const System& system);
+    ReferenceCalcAmoebaTorsionTorsionForceKernel(const std::string& name, const Platform& platform, const System& system);
     ~ReferenceCalcAmoebaTorsionTorsionForceKernel();
     /**
      * Initialize the kernel.
@@ -350,7 +351,7 @@ private:
  */
 class ReferenceCalcAmoebaMultipoleForceKernel : public CalcAmoebaMultipoleForceKernel {
 public:
-    ReferenceCalcAmoebaMultipoleForceKernel(std::string name, const Platform& platform, const System& system);
+    ReferenceCalcAmoebaMultipoleForceKernel(const std::string& name, const Platform& platform, const System& system);
     ~ReferenceCalcAmoebaMultipoleForceKernel();
     /**
      * Initialize the kernel.
@@ -470,7 +471,7 @@ private:
  */
 class ReferenceCalcAmoebaVdwForceKernel : public CalcAmoebaVdwForceKernel {
 public:
-    ReferenceCalcAmoebaVdwForceKernel(std::string name, const Platform& platform, const System& system);
+    ReferenceCalcAmoebaVdwForceKernel(const std::string& name, const Platform& platform, const System& system);
     ~ReferenceCalcAmoebaVdwForceKernel();
     /**
      * Initialize the kernel.
@@ -501,13 +502,7 @@ private:
     int usePBC;
     double cutoff;
     double dispersionCoefficient;
-    std::vector<int> indexIVs;
-    std::vector< std::set<int> > allExclusions;
-    std::vector<double> sigmas;
-    std::vector<double> epsilons;
-    std::vector<double> reductions;
-    std::string sigmaCombiningRule;
-    std::string epsilonCombiningRule;
+    AmoebaReferenceVdwForce vdwForce;
     const System& system;
     NeighborList* neighborList;
 };
@@ -517,7 +512,7 @@ private:
  */
 class ReferenceCalcAmoebaWcaDispersionForceKernel : public CalcAmoebaWcaDispersionForceKernel {
 public:
-    ReferenceCalcAmoebaWcaDispersionForceKernel(std::string name, const Platform& platform, const System& system);
+    ReferenceCalcAmoebaWcaDispersionForceKernel(const std::string& name, const Platform& platform, const System& system);
     ~ReferenceCalcAmoebaWcaDispersionForceKernel();
     /**
      * Initialize the kernel.
@@ -564,7 +559,7 @@ private:
  */
 class ReferenceCalcAmoebaGeneralizedKirkwoodForceKernel : public CalcAmoebaGeneralizedKirkwoodForceKernel {
 public:
-    ReferenceCalcAmoebaGeneralizedKirkwoodForceKernel(std::string name, const Platform& platform, const System& system);
+    ReferenceCalcAmoebaGeneralizedKirkwoodForceKernel(const std::string& name, const Platform& platform, const System& system);
     ~ReferenceCalcAmoebaGeneralizedKirkwoodForceKernel();
     /**
      * Initialize the kernel.
@@ -698,7 +693,7 @@ private:
  */
 class ReferenceCalcHippoNonbondedForceKernel : public CalcHippoNonbondedForceKernel {
 public:
-    ReferenceCalcHippoNonbondedForceKernel(std::string name, const Platform& platform, const System& system);
+    ReferenceCalcHippoNonbondedForceKernel(const std::string& name, const Platform& platform, const System& system);
     ~ReferenceCalcHippoNonbondedForceKernel();
     /**
      * Initialize the kernel.

@@ -76,7 +76,12 @@ class WrapperGenerator:
                             'static std::vector<std::string> OpenMM::Platform::loadPluginsFromDirectory',
                             'Vec3 OpenMM::LocalCoordinatesSite::getOriginWeights',
                             'Vec3 OpenMM::LocalCoordinatesSite::getXWeights',
-                            'Vec3 OpenMM::LocalCoordinatesSite::getYWeights']
+                            'Vec3 OpenMM::LocalCoordinatesSite::getYWeights',
+                            'std::vector<double> OpenMM::NoseHooverChain::getYoshidaSuzukiWeights',
+                            'const std::vector<int>& OpenMM::NoseHooverIntegrator::getAllThermostatedIndividualParticles',
+                            'const std::vector<std::tuple<int, int, double> >& OpenMM::NoseHooverIntegrator::getAllThermostatedPairs',
+                            'virtual void OpenMM::NoseHooverIntegrator::stateChanged'
+                           ] 
         self.hideClasses = ['Kernel', 'KernelImpl', 'KernelFactory', 'ContextImpl', 'SerializationNode', 'SerializationProxy']
         self.nodeByID={}
 
@@ -165,6 +170,7 @@ class CHeaderGenerator(WrapperGenerator):
                                  'std::vector< std::string >': 'OpenMM_StringArray',
                                  'std::vector< Vec3 >': 'OpenMM_Vec3Array',
                                  'std::vector< std::pair< int, int > >': 'OpenMM_BondArray',
+                                 'const std::vector< std::pair< int, int > >': 'OpenMM_BondArray',
                                  'std::map< std::string, double >': 'OpenMM_ParameterArray',
                                  'std::map< std::string, std::string >': 'OpenMM_PropertyArray',
                                  'std::vector< double >': 'OpenMM_DoubleArray',
@@ -229,7 +235,7 @@ class CHeaderGenerator(WrapperGenerator):
         shortClassName = stripOpenMMPrefix(className)
         typeName = convertOpenMMPrefix(className)
         destructorName = '~'+shortClassName
-        isAbstract = any('virt' in method.attrib and method.attrib['virt'] == 'pure-virtual' for method in classNode.getiterator('memberdef'))
+        isAbstract = any('virt' in method.attrib and method.attrib['virt'] == 'pure-virtual' for method in classNode.iter('memberdef'))
 
         if not isAbstract:
             # Write constructors
@@ -261,6 +267,7 @@ class CHeaderGenerator(WrapperGenerator):
             methodNames[methodNode] = shortMethodDefinition.split()[-1]
         
         # Write other methods
+        nameCount = {}
         for methodNode in methodList:
             methodName = methodNames[methodNode]
             if methodName in (shortClassName, destructorName):
@@ -272,6 +279,13 @@ class CHeaderGenerator(WrapperGenerator):
                 # There are two identical methods that differ only in whether they are const.  Skip the const one.
                 continue
             returnType = self.getType(getText("type", methodNode))
+            if methodName in nameCount:
+                # There are multiple methods with the same name.
+                count = nameCount[methodName]
+                methodName = "%s_%d" % (methodName, count)
+                nameCount[methodName] = count+1
+            else:
+                nameCount[methodName] = 1
             self.out.write("extern OPENMM_EXPORT %s %s_%s(" % (returnType, typeName, methodName))
             isInstanceMethod = (methodNode.attrib['static'] != 'yes')
             if isInstanceMethod:
@@ -482,7 +496,7 @@ class CSourceGenerator(WrapperGenerator):
         shortClassName = stripOpenMMPrefix(className)
         typeName = convertOpenMMPrefix(className)
         destructorName = '~'+shortClassName
-        isAbstract = any('virt' in method.attrib and method.attrib['virt'] == 'pure-virtual' for method in classNode.getiterator('memberdef'))
+        isAbstract = any('virt' in method.attrib and method.attrib['virt'] == 'pure-virtual' for method in classNode.iter('memberdef'))
 
         if not isAbstract:
             # Write constructors
@@ -520,6 +534,7 @@ class CSourceGenerator(WrapperGenerator):
             methodNames[methodNode] = shortMethodDefinition.split()[-1]
         
         # Write other methods
+        nameCount = {}
         for methodNode in methodList:
             methodName = methodNames[methodNode]
             if methodName in (shortClassName, destructorName):
@@ -530,6 +545,13 @@ class CSourceGenerator(WrapperGenerator):
             if isConstMethod and any(methodNames[m] == methodName and m.attrib['const'] == 'no' for m in methodList):
                 # There are two identical methods that differ only in whether they are const.  Skip the const one.
                 continue
+            if methodName in nameCount:
+                # There are multiple methods with the same name.
+                count = nameCount[methodName]
+                methodName = "%s_%d" % (methodName, count)
+                nameCount[methodName] = count+1
+            else:
+                nameCount[methodName] = 1
             methodType = getText("type", methodNode)
             returnType = self.getType(methodType)
             if methodType in self.classesByShortName:
@@ -556,7 +578,7 @@ class CSourceGenerator(WrapperGenerator):
                 self.out.write('%s*>(target)->' % className)
             else:
                 self.out.write('%s::' % className)
-            self.out.write('%s(' % methodName)
+            self.out.write('%s(' % methodNames[methodNode])
             self.writeInvocationArguments(methodNode, False)
             self.out.write(');\n')
             if returnType != 'void':
@@ -937,7 +959,7 @@ class FortranHeaderGenerator(WrapperGenerator):
         shortClassName = stripOpenMMPrefix(className)
         typeName = convertOpenMMPrefix(className)
         destructorName = '~'+shortClassName
-        isAbstract = any('virt' in method.attrib and method.attrib['virt'] == 'pure-virtual' for method in classNode.getiterator('memberdef'))
+        isAbstract = any('virt' in method.attrib and method.attrib['virt'] == 'pure-virtual' for method in classNode.iter('memberdef'))
 
         if not isAbstract:
             # Write constructors
@@ -976,6 +998,7 @@ class FortranHeaderGenerator(WrapperGenerator):
             methodNames[methodNode] = shortMethodDefinition.split()[-1]
         
         # Write other methods
+        nameCount = {}
         for methodNode in methodList:
             methodName = methodNames[methodNode]
             if methodName in (shortClassName, destructorName):
@@ -986,6 +1009,13 @@ class FortranHeaderGenerator(WrapperGenerator):
             if isConstMethod and any(methodNames[m] == methodName and m.attrib['const'] == 'no' for m in methodList):
                 # There are two identical methods that differ only in whether they are const.  Skip the const one.
                 continue
+            if methodName in nameCount:
+                # There are multiple methods with the same name.
+                count = nameCount[methodName]
+                methodName = "%s_%d" % (methodName, count)
+                nameCount[methodName] = count+1
+            else:
+                nameCount[methodName] = 1
             returnType = self.getType(getText("type", methodNode))
             hasReturnValue = (returnType in ('integer*4', 'real*8'))
             hasReturnArg = not (hasReturnValue or returnType == 'void')
@@ -1499,7 +1529,7 @@ class FortranSourceGenerator(WrapperGenerator):
         shortClassName = stripOpenMMPrefix(className)
         typeName = convertOpenMMPrefix(className)
         destructorName = '~'+shortClassName
-        isAbstract = any('virt' in method.attrib and method.attrib['virt'] == 'pure-virtual' for method in classNode.getiterator('memberdef'))
+        isAbstract = any('virt' in method.attrib and method.attrib['virt'] == 'pure-virtual' for method in classNode.iter('memberdef'))
 
         if not isAbstract:
             # Write constructors
@@ -1533,6 +1563,7 @@ class FortranSourceGenerator(WrapperGenerator):
             methodNames[methodNode] = shortMethodDefinition.split()[-1]
         
         # Write other methods
+        nameCount = {}
         for methodNode in methodList:
             methodName = methodNames[methodNode]
             if methodName in (shortClassName, destructorName):
@@ -1545,6 +1576,13 @@ class FortranSourceGenerator(WrapperGenerator):
             if isConstMethod and any(methodNames[m] == methodName and m.attrib['const'] == 'no' for m in methodList):
                 # There are two identical methods that differ only in whether they are const.  Skip the const one.
                 continue
+            if methodName in nameCount:
+                # There are multiple methods with the same name.
+                count = nameCount[methodName]
+                methodName = "%s_%d" % (methodName, count)
+                nameCount[methodName] = count+1
+            else:
+                nameCount[methodName] = 1
             functionName = "%s_%s" % (typeName, methodName)
             truncatedName = functionName[:63]
             self.writeOneMethod(classNode, methodNode, functionName, truncatedName.lower()+'_')

@@ -80,9 +80,9 @@ void testSingleBond() {
     velocities[0] = Vec3(-0.5*dt*0.5*0.5, 0, 0);
     velocities[1] = Vec3(0.5*dt*0.5*0.5, 0, 0);
     context.setVelocities(velocities);
-    
+
     // This is simply a harmonic oscillator, so compare it to the analytical solution.
-    
+
     const double freq = 1.0;;
     for (int i = 0; i < 1000; ++i) {
         State state = context.getState(State::Positions | State::Velocities | State::Energy);
@@ -133,9 +133,9 @@ void testConstraints() {
     }
     context.setPositions(positions);
     context.setVelocities(velocities);
-    
+
     // Simulate it and see whether the constraints remain satisfied.
-    
+
     double initialEnergy = 0.0;
     for (int i = 0; i < 1000; ++i) {
         State state = context.getState(State::Positions | State::Energy);
@@ -177,20 +177,20 @@ void testVelocityConstraints() {
         system.addParticle(i%2 == 0 ? 5.0 : 10.0);
         forceField->addParticle((i%2 == 0 ? 0.2 : -0.2), 0.5, 5.0);
     }
-    
+
     // Constrain the first three particles with SHAKE.
-    
+
     system.addConstraint(0, 1, 1.0);
     system.addConstraint(1, 2, 1.0);
-    
+
     // Constrain the next three with SETTLE.
-    
+
     system.addConstraint(3, 4, 1.0);
     system.addConstraint(5, 4, 1.0);
     system.addConstraint(3, 5, sqrt(2.0));
-    
+
     // Constraint the rest with CCMA.
-    
+
     for (int i = 6; i < numParticles-1; ++i)
         system.addConstraint(i, i+1, 1.0);
     system.addForce(forceField);
@@ -206,9 +206,9 @@ void testVelocityConstraints() {
     }
     context.setPositions(positions);
     context.setVelocities(velocities);
-    
+
     // Simulate it and see whether the constraints remain satisfied.
-    
+
     double initialEnergy = 0.0;
     for (int i = 0; i < 1000; ++i) {
         integrator.step(2);
@@ -254,16 +254,16 @@ void testConstrainedMasslessParticles() {
     bool failed = false;
     try {
         // This should throw an exception.
-        
+
         Context context(system, integrator, platform);
     }
     catch (exception& ex) {
         failed = true;
     }
     ASSERT(failed);
-    
+
     // Now make both particles massless, which should work.
-    
+
     system.setParticleMass(1, 0.0);
     Context context(system, integrator, platform);
     context.setPositions(positions);
@@ -301,13 +301,13 @@ void testWithThermostat() {
         positions[i] = Vec3((i%2 == 0 ? 2 : -2), (i%4 < 2 ? 2 : -2), (i < 4 ? 2 : -2));
     context.setPositions(positions);
     context.setVelocitiesToTemperature(temp);
-    
+
     // Let it equilibrate.
-    
+
     integrator.step(10000);
-    
+
     // Now run it for a while and see if the temperature is correct.
-    
+
     double ke = 0.0;
     for (int i = 0; i < numSteps; ++i) {
         State state = context.getState(State::Energy);
@@ -345,9 +345,9 @@ void testMonteCarlo() {
     positions[0] = Vec3(-1, 0, 0);
     positions[1] = Vec3(1, 0, 0);
     context.setPositions(positions);
-    
+
     // Compute the histogram of distances and see if it satisfies a Boltzmann distribution.
-    
+
     const int numBins = 100;
     const double maxDist = 4.0;
     const int numIterations = 5000;
@@ -407,9 +407,9 @@ void testSum() {
     integrator.addComputeGlobal("temp", "ke+dt");
     Context context(system, integrator, platform);
     context.setPositions(positions);
-    
+
     // See if the sum is being computed correctly.
-    
+
     for (int i = 0; i < 100; ++i) {
         integrator.step(1);
         State state = context.getState(State::Energy);
@@ -431,9 +431,9 @@ void testParameter() {
     integrator.addComputeGlobal("temp", "AndersenTemperature");
     integrator.addComputeGlobal("AndersenTemperature", "temp*2");
     Context context(system, integrator, platform);
-    
+
     // See if the parameter is being used correctly.
-    
+
     for (int i = 0; i < 10; i++) {
         integrator.step(1);
         ASSERT_EQUAL_TOL(context.getParameter("AndersenTemperature"), 0.1*(1<<(i+1)), 1e-10);
@@ -456,9 +456,9 @@ void testRandomDistributions() {
     integrator.addComputePerDof("a", "uniform");
     integrator.addComputePerDof("b", "gaussian");
     Context context(system, integrator, platform);
-    
+
     // See if the random numbers are distributed correctly.
-    
+
     vector<int> bins(numBins);
     double mean = 0.0;
     double var = 0.0;
@@ -484,17 +484,17 @@ void testRandomDistributions() {
                 kurtosis += v*v*v*v;
             }
     }
-    
+
     // Check the distribution of uniform randoms.
-    
+
     int numValues = numParticles*numSteps*3;
     double expected = numValues/(double) numBins;
     double tol = 4*sqrt(expected);
     for (int i = 0; i < numBins; i++)
         ASSERT(bins[i] >= expected-tol && bins[i] <= expected+tol);
-    
+
     // Check the distribution of gaussian randoms.
-    
+
     mean /= numValues;
     var /= numValues;
     skew /= numValues;
@@ -550,9 +550,9 @@ void testPerDofVariables() {
     for (int i = 0; i < numParticles; i++)
         initialValues[i] = Vec3(i+0.1, i+0.2, i+0.3);
     integrator.setPerDofVariable(0, initialValues);
-    
+
     // Run a simulation, then query per-DOF values and see if they are correct.
-    
+
     vector<Vec3> values;
     for (int i = 0; i < 100; ++i) {
         integrator.step(1);
@@ -597,6 +597,7 @@ void testForceGroups() {
     integrator.addComputeGlobal("oute", "energy");
     integrator.addComputeGlobal("oute1", "energy1");
     integrator.addComputeGlobal("oute2", "energy2");
+    integrator.setIntegrationForceGroups((1<<1) + (1<<2));
     HarmonicBondForce* bonds = new HarmonicBondForce();
     bonds->addBond(0, 1, 1.5, 1.1);
     bonds->setForceGroup(1);
@@ -606,14 +607,18 @@ void testForceGroups() {
     nb->addParticle(0.2, 1, 0);
     nb->setForceGroup(2);
     system.addForce(nb);
+    CustomExternalForce* external = new CustomExternalForce("x");
+    external->addParticle(0);
+    external->setForceGroup(3);
+    system.addForce(external);
     Context context(system, integrator, platform);
     vector<Vec3> positions(2);
     positions[0] = Vec3(-1, 0, 0);
     positions[1] = Vec3(1, 0, 0);
     context.setPositions(positions);
-    
+
     // See if the various forces are computed correctly.
-    
+
     integrator.step(1);
     vector<Vec3> f, f1, f2;
     double e1 = 0.5*1.1*0.5*0.5;
@@ -630,16 +635,16 @@ void testForceGroups() {
     ASSERT_EQUAL_TOL(e1, integrator.getGlobalVariable(1), 1e-5);
     ASSERT_EQUAL_TOL(e2, integrator.getGlobalVariable(2), 1e-5);
     ASSERT_EQUAL_TOL(e1+e2, integrator.getGlobalVariable(0), 1e-5);
-    
+
     // Make sure they also match the values returned by the Context.
-    
-    State s = context.getState(State::Forces | State::Energy, false);
+
+    State s = context.getState(State::Forces | State::Energy, false, 6);
     State s1 = context.getState(State::Forces | State::Energy, false, 2);
     State s2 = context.getState(State::Forces | State::Energy, false, 4);
     vector<Vec3> c, c1, c2;
-    c = context.getState(State::Forces, false).getForces();
-    c1 = context.getState(State::Forces, false, 2).getForces();
-    c2 = context.getState(State::Forces, false, 4).getForces();
+    c = s.getForces();
+    c1 = s1.getForces();
+    c2 = s2.getForces();
     ASSERT_EQUAL_VEC(f[0], c[0], 1e-5);
     ASSERT_EQUAL_VEC(f[1], c[1], 1e-5);
     ASSERT_EQUAL_VEC(f1[0], c1[0], 1e-5);
@@ -691,9 +696,9 @@ void testRespa() {
     }
     context.setPositions(positions);
     context.setVelocities(velocities);
-    
+
     // Simulate it and monitor energy conservations.
-    
+
     double initialEnergy = 0.0;
     for (int i = 0; i < 1000; ++i) {
         State state = context.getState(State::Energy);
@@ -780,9 +785,9 @@ void testChangingGlobal() {
     integrator.addComputePerDof("a", "0.5");
     integrator.addComputePerDof("b", "a+g");
     Context context(system, integrator, platform);
-    
+
     // See if everything is being calculated correctly..
-    
+
     for (int i = 0; i < 10; i++) {
         integrator.step(1);
         ASSERT_EQUAL_TOL(i+1.0, integrator.getGlobalVariable(0), 1e-5);
@@ -799,9 +804,9 @@ void testEnergyParameterDerivatives() {
     System system;
     for (int i = 0; i < 3; i++)
         system.addParticle(1.0);
-    
+
     // Create some custom forces that depend on parameters.
-    
+
     CustomBondForce* bonds = new CustomBondForce("K*(A*r-r0)^2");
     system.addForce(bonds);
     bonds->addGlobalParameter("K", 2.0);
@@ -820,9 +825,9 @@ void testEnergyParameterDerivatives() {
     angles->addEnergyParameterDerivative("theta0");
     angles->addAngle(0, 1, 2);
     angles->setForceGroup(1);
-    
+
     // Create an integrator that records parameter derivatives.
-    
+
     CustomIntegrator integrator(0.1);
     integrator.addGlobalVariable("dEdK", 0.0);
     integrator.addGlobalVariable("dEdr0", 0.0);
@@ -842,18 +847,18 @@ void testEnergyParameterDerivatives() {
     integrator.addComputePerDof("dEdK_1", "deriv(energy1, K)");
     integrator.addComputeGlobal("dEdr0_1", "deriv(energy1, r0)");
     integrator.addComputeGlobal("dEdtheta0_1", "deriv(energy1, theta0)");
-    
+
     // Create a Context.
-    
+
     Context context(system, integrator, platform);
     vector<Vec3> positions(3);
     positions[0] = Vec3(0, 1, 0);
     positions[1] = Vec3(0, 0, 0);
     positions[2] = Vec3(1, 0, 0);
     context.setPositions(positions);
-    
+
     // Check the results.
-    
+
     integrator.step(1);
     vector<Vec3> values;
     double dEdK_0 = (1.0-1.5)*(1.0-1.5);
@@ -1013,10 +1018,10 @@ void testUpdateContextState() {
     for (int i = 0; i < numParticles; ++i)
         positions[i] = Vec3(genrand_real2(sfmt), genrand_real2(sfmt), genrand_real2(sfmt))*boxSize;
     context.setPositions(positions);
-    
+
     // Make sure the forces change when the barostat accepts a step, and don't change
     // otherwise.
-    
+
     for (int i = 0; i < 50; i++) {
         State state1 = context.getState(0);
         integrator.step(1);
@@ -1063,9 +1068,9 @@ void testVectorFunctions() {
     context.setPositions(positions);
     context.setVelocities(velocities);
     integrator.step(1);
-    
+
     // See if the expressions were computed correctly.
-    
+
     double sumy = 0;
     vector<Vec3> angular, shuffle, multicross, maxplus;
     integrator.getPerDofVariable(0, angular);
@@ -1117,9 +1122,9 @@ void testRecordEnergy() {
     }
     context.setPositions(positions);
     context.setVelocities(velocities);
-    
+
     // Simulate it and see whether the energies are recorded correctly.
-    
+
     for (int i = 0; i < 10; ++i) {
         double startEnergy = context.getState(State::Energy).getPotentialEnergy();
         integrator.step(1);
@@ -1127,6 +1132,34 @@ void testRecordEnergy() {
         ASSERT_EQUAL_TOL(startEnergy, integrator.getGlobalVariable(0), 1e-6);
         ASSERT_EQUAL_TOL(endEnergy, integrator.getGlobalVariable(1), 1e-6);
     }
+}
+
+void testInitialTemperature() {
+    // Check temperature initialization for a collection of randomly placed particles
+    const int numParticles = 50000;
+    const int nDoF = 3 * numParticles;
+    const double targetTemperature = 300;
+    System system;
+    OpenMM_SFMT::SFMT sfmt;
+    init_gen_rand(0, sfmt);
+    std::vector<Vec3> positions(numParticles);
+
+    for (int i = 0; i < numParticles; i++) {
+        system.addParticle(1.0);
+        positions[i][0] = genrand_real2(sfmt);
+        positions[i][1] = genrand_real2(sfmt);
+        positions[i][2] = genrand_real2(sfmt);
+    }
+
+    CustomIntegrator integrator(0.001);
+    Context context(system, integrator, platform);
+    context.setPositions(positions);
+    context.setVelocitiesToTemperature(targetTemperature);
+    auto velocities = context.getState(State::Velocities).getVelocities();
+    double kineticEnergy = 0;
+    for(const auto &v : velocities) kineticEnergy += 0.5 * v.dot(v);
+    double temperature = (2*kineticEnergy / (nDoF*BOLTZ));
+    ASSERT_USUALLY_EQUAL_TOL(targetTemperature, temperature, 0.01);
 }
 
 void testCheckpoint() {
@@ -1142,12 +1175,36 @@ void testCheckpoint() {
     integrator.setGlobalVariable(0, 5.0);
     vector<Vec3> b1(1, Vec3(1, 2, 3));
     integrator.setPerDofVariable(0, b1);
-    stringstream checkpoint; 
+    stringstream checkpoint;
     context.createCheckpoint(checkpoint);
     integrator.setGlobalVariable(0, 10.0);
     vector<Vec3> b2(1, Vec3(4, 5, 6));
     integrator.setPerDofVariable(0, b2);
     context.loadCheckpoint(checkpoint);
+    ASSERT_EQUAL(5.0, integrator.getGlobalVariable(0));
+    vector<Vec3> b3;
+    integrator.getPerDofVariable(0, b3);
+    ASSERT_EQUAL_VEC(b1[0], b3[0], 1e-6);
+}
+
+void testSaveParameters() {
+    // Test that integrator variables get loaded correctly from States.
+    System system;
+    system.addParticle(1.0);
+    CustomIntegrator integrator(0.001);
+    integrator.addGlobalVariable("a", 1.0);
+    integrator.addPerDofVariable("b", 2.0);
+    Context context(system, integrator, platform);
+    vector<Vec3> positions(1, Vec3());
+    context.setPositions(positions);
+    integrator.setGlobalVariable(0, 5.0);
+    vector<Vec3> b1(1, Vec3(1, 2, 3));
+    integrator.setPerDofVariable(0, b1);
+    State savedState = context.getState(State::IntegratorParameters);
+    integrator.setGlobalVariable(0, 10.0);
+    vector<Vec3> b2(1, Vec3(4, 5, 6));
+    integrator.setPerDofVariable(0, b2);
+    context.setState(savedState);
     ASSERT_EQUAL(5.0, integrator.getGlobalVariable(0));
     vector<Vec3> b3;
     integrator.getPerDofVariable(0, b3);
@@ -1181,7 +1238,9 @@ int main(int argc, char* argv[]) {
         testUpdateContextState();
         testVectorFunctions();
         testRecordEnergy();
+        testInitialTemperature();
         testCheckpoint();
+        testSaveParameters();
         runPlatformTests();
     }
     catch(const exception& e) {

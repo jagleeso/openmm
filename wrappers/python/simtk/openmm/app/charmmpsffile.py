@@ -164,6 +164,7 @@ class CharmmPsfFile(object):
     CMAP_FORCE_GROUP = 5
     NONBONDED_FORCE_GROUP = 6
     GB_FORCE_GROUP = 6
+    DRUDE_FORCE_GROUP = 7
 
     @_catchindexerror
     def __init__(self, psf_name, periodicBoxVectors=None, unitCellDimensions=None):
@@ -270,6 +271,9 @@ class CharmmPsfFile(object):
             if (atom_list[id1].name[0]=='D' or atom_list[id2].name[0]=='D'):
                 drudepair_list.append([min(id1,id2), max(id1,id2)])
             elif (atom_list[id1].name[0:2]=='LP' or atom_list[id2].name[0:2]=='LP' or atom_list[id1].name=='OM' or atom_list[id2].name=='OM'):
+                pass
+            # Ignore H-H bond in water if present
+            elif atom_list[id1].name[0]=='H' and atom_list[id2].name[0]=='H' and (atom_list[id1].residue.resname in WATNAMES):
                 pass
             else:
                 bond_list.append(Bond(atom_list[id1], atom_list[id2]))
@@ -472,6 +476,37 @@ class CharmmPsfFile(object):
             self.box_vectors = (Vec3(unitCellDimensions[0], 0, 0), Vec3(0, unitCellDimensions[1], 0), Vec3(0, 0, unitCellDimensions[2]))*u.nanometers
         else:
             self.box_vectors = periodicBoxVectors
+
+    def _build_exclusion_list(self):
+        pair_12_set = set()
+        pair_13_set = set()
+        pair_14_set = set()
+        for bond in self.bond_list:
+            a1, a2 = bond.atom1, bond.atom2
+            pair = (min(a1.idx, a2.idx), max(a1.idx, a2.idx),)
+            pair_12_set.add(pair)
+        for bond in self.bond_list:
+            a2, a3 = bond.atom1, bond.atom2
+            for a1 in a2.bond_partners:
+                pair = (min(a1.idx, a3.idx), max(a1.idx, a3.idx),)
+                if a1 != a3:
+                    pair_13_set.add(pair)
+            for a4 in a3.bond_partners:
+                pair = (min(a2.idx, a4.idx), max(a2.idx, a4.idx),)
+                if a2 != a4:
+                    pair_13_set.add(pair)
+        for bond in self.bond_list:
+            a2, a3 = bond.atom1, bond.atom2
+            for a1 in a2.bond_partners:
+                for a4 in a3.bond_partners:
+                    pair = (min(a1.idx, a4.idx), max(a1.idx, a4.idx),)
+                    if a1 != a3 and a2 != a4 and a1 != a4:
+                        pair_14_set.add(pair)
+
+        # in case there are 3,4,5-member rings
+        self.pair_12_list = list(sorted(pair_12_set))
+        self.pair_13_list = list(sorted(pair_13_set - pair_12_set))
+        self.pair_14_list = list(sorted(pair_14_set - pair_13_set.union(pair_12_set)))
 
     @staticmethod
     def _convert(string, type, message):
@@ -772,7 +807,8 @@ class CharmmPsfFile(object):
                      ewaldErrorTolerance=0.0005,
                      flexibleConstraints=True,
                      verbose=False,
-                     gbsaModel=None):
+                     gbsaModel=None,
+                     drudeMass=0.4*u.amu):
         """Construct an OpenMM System representing the topology described by the
         prmtop file. You MUST have loaded a parameter set into this PSF before
         calling createSystem. If not, AttributeError will be raised. ValueError
@@ -824,12 +860,15 @@ class CharmmPsfFile(object):
         ewaldErrorTolerance : float=0.0005
             The error tolerance to use if the nonbonded method is Ewald, PME, or LJPME.
         flexibleConstraints : bool=True
-            Are our constraints flexible or not?
+            If True, parameters for constrained degrees of freedom will be added to the System
         verbose : bool=False
             Optionally prints out a running progress report
         gbsaModel : str=None
             Can be ACE (to use the ACE solvation model) or None. Other values
             raise a ValueError
+        drudeMass : mass=0.4*amu
+            The mass to use for Drude particles.  Any mass added to a Drude particle is
+            subtracted from its parent atom to keep their total mass the same.
         """
         # Load the parameter set
         self.loadParameters(params)
@@ -907,31 +946,29 @@ class CharmmPsfFile(object):
             pass
 
         # Set up the constraints
-        if verbose and (constraints is not None and not rigidWater):
+        def _is_bond_in_water(bond):
+            return bond.atom1.residue.resname in WATNAMES and \
+                   tuple(sorted([bond.atom1.type.atomic_number, bond.atom2.type.atomic_number])) == (1, 8)
+
+        n_cons_bond = n_cons_angle = 0
+        if verbose and (constraints is not None or rigidWater):
             print('Adding constraints...')
-        if constraints in (ff.HBonds, ff.AllBonds, ff.HAngles):
-            for bond in self.bond_list:
-                if (bond.atom1.type.atomic_number != 1 and
-                    bond.atom2.type.atomic_number != 1):
-                    continue
+
+        for bond in self.bond_list:
+            if constraints in (ff.AllBonds, ff.HAngles):
                 system.addConstraint(bond.atom1.idx, bond.atom2.idx,
                                      bond.bond_type.req*length_conv)
-        if constraints in (ff.AllBonds, ff.HAngles):
-            for bond in self.bond_list:
-                if (bond.atom1.type.atomic_number == 1 or
-                    bond.atom2.type.atomic_number == 1):
-                    continue
-                system.addConstraint(bond.atom1.idx, bond.atom2.idx,
-                                     bond.bond_type.req*length_conv)
-        if rigidWater and constraints is None:
-            for bond in self.bond_list:
-                if (bond.atom1.type.atomic_number != 1 and
-                    bond.atom2.type.atomic_number != 1):
-                    continue
-                if (bond.atom1.residue.resname in WATNAMES and
-                    bond.atom2.residue.resname in WATNAMES):
+                n_cons_bond += 1
+            elif constraints is ff.HBonds:
+                if bond.atom1.type.atomic_number == 1 or bond.atom2.type.atomic_number == 1:
                     system.addConstraint(bond.atom1.idx, bond.atom2.idx,
                                          bond.bond_type.req*length_conv)
+                    n_cons_bond += 1
+            elif rigidWater:
+                if _is_bond_in_water(bond):
+                    system.addConstraint(bond.atom1.idx, bond.atom2.idx,
+                                         bond.bond_type.req*length_conv)
+                    n_cons_bond += 1
 
         # Add virtual sites
         if hasattr(self, 'lonepair_list'):
@@ -967,14 +1004,13 @@ class CharmmPsfFile(object):
         force = mm.HarmonicBondForce()
         force.setForceGroup(self.BOND_FORCE_GROUP)
         # See which, if any, energy terms we omit
-        omitall = not flexibleConstraints and constraints is ff.AllBonds
-        omith = omitall or (flexibleConstraints and constraints in
-                            (ff.HBonds, ff.AllBonds, ff.HAngles))
+        omit_all = not flexibleConstraints and constraints in (ff.AllBonds, ff.HAngles)
+        omit_h = not flexibleConstraints and constraints is not None
+        omit_h_in_water = not flexibleConstraints and (constraints is not None or rigidWater)
         for bond in self.bond_list:
-            if omitall: continue
-            if omith and (bond.atom1.type.atomic_number == 1 or
-                          bond.atom2.type.atomic_number == 1):
-                continue
+            if omit_all: continue
+            if omit_h and (bond.atom1.type.atomic_number == 1 or bond.atom2.type.atomic_number == 1): continue
+            if omit_h_in_water and _is_bond_in_water(bond): continue
             force.addBond(bond.atom1.idx, bond.atom2.idx,
                           bond.bond_type.req*length_conv,
                           2*bond.bond_type.k*bond_frc_conv)
@@ -993,16 +1029,16 @@ class CharmmPsfFile(object):
                 atom_constraints[c[1]].append((c[0], dist))
         for angle in self.angle_list:
             # Only constrain angles including hydrogen here
-            if (angle.atom1.type.atomic_number != 1 and
-                angle.atom2.type.atomic_number != 1 and
-                angle.atom3.type.atomic_number != 1):
+            if (angle.atom1.type.atomic_number != 1 and angle.atom3.type.atomic_number != 1):
                 continue
+            a1 = angle.atom1.type.atomic_number
+            a2 = angle.atom2.type.atomic_number
+            a3 = angle.atom3.type.atomic_number
+            nh = int(a1==1) + int(a3==1)
             if constraints is ff.HAngles:
-                a1 = angle.atom1.atomic_number
-                a2 = angle.atom2.atomic_number
-                a3 = angle.atom3.atomic_number
-                nh = int(a1==1) + int(a2==1) + int(a3==1)
-                constrained = (nh >= 2 or (nh == 1 and a2 == 8))
+                constrained = (nh == 2 or (nh == 1 and a2 == 8))
+            elif rigidWater:
+                constrained = (nh == 2 and a2 == 8 and angle.atom1.residue.resname in WATNAMES)
             else:
                 constrained = False # no constraints
             if constrained:
@@ -1014,17 +1050,19 @@ class CharmmPsfFile(object):
                         l2 = bond.bond_type.req * length_conv
                 # Compute the distance between the atoms and add a constraint
                 length = sqrt(l1*l1 + l2*l2 - 2*l1*l2*
-                              cos(angle.angle_type.theteq))
-                system.addConstraint(bond.atom1.idx, bond.atom2.idx, length)
+                              cos(angle.angle_type.theteq*pi/180))
+                system.addConstraint(angle.atom1.idx, angle.atom3.idx, length)
+                n_cons_angle += 1
             if flexibleConstraints or not constrained:
                 force.addAngle(angle.atom1.idx, angle.atom2.idx,
                                angle.atom3.idx, angle.angle_type.theteq*pi/180,
                                2*angle.angle_type.k*angle_frc_conv)
+        if verbose and (constraints is not None or rigidWater):
+            print('    Number of bond constraints:', n_cons_bond)
+            print('    Number of angle constraints:', n_cons_angle)
         for angle in self.angle_list:
             # Already did the angles with hydrogen above. So skip those here
-            if (angle.atom1.type.atomic_number == 1 or
-                angle.atom2.type.atomic_number == 1 or
-                angle.atom3.type.atomic_number == 1):
+            if (angle.atom1.type.atomic_number == 1 or angle.atom3.type.atomic_number == 1):
                 continue
             force.addAngle(angle.atom1.idx, angle.atom2.idx,
                            angle.atom3.idx, angle.angle_type.theteq*pi/180,
@@ -1327,35 +1365,33 @@ class CharmmPsfFile(object):
             # now, add the actual force to the system
             system.addForce(nbtforce)
 
+        # build 1-2, 1-3 and 1-4 pairs from connectivity
+        if verbose:
+            print('Build exclusion list...')
+        self._build_exclusion_list()
+        if verbose:
+            print('    Number of 1-2 pairs: %i' % len(self.pair_12_list))
+            print('    Number of 1-3 pairs: %i' % len(self.pair_13_list))
+            print('    Number of 1-4 pairs: %i' % len(self.pair_14_list))
+
         # Add 1-4 interactions
-        excluded_atom_pairs = set() # save these pairs so we don't zero them out
         sigma_scale = 2**(-1/6)
-        for tor in self.dihedral_parameter_list:
-            # First check to see if atoms 1 and 4 are already excluded because
-            # they are 1-2 or 1-3 pairs (would happen in 6-member rings or
-            # fewer). Then check that they're not already added as exclusions
-            if tor.atom1 in tor.atom4.bond_partners: continue
-            if tor.atom1 in tor.atom4.angle_partners: continue
-            key = min((tor.atom1.idx, tor.atom4.idx),
-                      (tor.atom4.idx, tor.atom1.idx))
-            if key in excluded_atom_pairs: continue # multiterm...
-            charge_prod = (tor.atom1.charge * tor.atom4.charge)
-            epsilon = (sqrt(abs(tor.atom1.type.epsilon_14) * ene_conv *
-                            abs(tor.atom4.type.epsilon_14) * ene_conv))
-            sigma = (tor.atom1.type.rmin_14 + tor.atom4.type.rmin_14) * (
-                     length_conv * sigma_scale)
-            force.addException(tor.atom1.idx, tor.atom4.idx,
-                               charge_prod, sigma, epsilon)
-            excluded_atom_pairs.add(
-                    min((tor.atom1.idx, tor.atom4.idx),
-                        (tor.atom4.idx, tor.atom1.idx))
-            )
+        nbxmod = abs(params.nbxmod)
+        if nbxmod == 4:
+            for ia1, ia4 in self.pair_14_list:
+                force.addException(ia1, ia4, 0.0, 0.1, 0.0)
+        if nbxmod == 5:
+            for ia1, ia4 in self.pair_14_list:
+                atom1 = self.atom_list[ia1]
+                atom4 = self.atom_list[ia4]
+                charge_prod = (atom1.charge * atom4.charge)
+                epsilon = sqrt(abs(atom1.type.epsilon_14 * atom4.type.epsilon_14)) * ene_conv
+                sigma = (atom1.type.rmin_14 + atom4.type.rmin_14) * (length_conv * sigma_scale)
+                force.addException(ia1, ia4, charge_prod, sigma, epsilon)
 
         # Add excluded atoms
         # Drude and lonepairs will be excluded based on their parent atoms
-        parent_exclude_list=[]
-        for atom in self.atom_list:
-            parent_exclude_list.append([])
+        parent_exclude_list=[[] for _ in self.atom_list]
         for lpsite in self.lonepair_list:
             idx = lpsite[1]
             idxa = lpsite[0]
@@ -1373,30 +1409,24 @@ class CharmmPsfFile(object):
                     for i in range(len(excludeterm)):
                         for j in range(i):
                             force.addException(excludeterm[j], excludeterm[i], 0.0, 0.1, 0.0)
-        # Exclude all bonds and angles, as well as the lonepair/Drude attached onto them
-        for atom in self.atom_list:
-            for atom2 in atom.bond_partners:
-                if atom2.idx > atom.idx:
-                    for excludeatom in [atom.idx]+parent_exclude_list[atom.idx]:
-                        for excludeatom2 in [atom2.idx]+parent_exclude_list[atom2.idx]:
-                            force.addException(excludeatom, excludeatom2, 0.0, 0.1, 0.0)
-            for atom2 in atom.angle_partners:
-                if atom2.idx > atom.idx:
-                    for excludeatom in [atom.idx]+parent_exclude_list[atom.idx]:
-                        for excludeatom2 in [atom2.idx]+parent_exclude_list[atom2.idx]:
-                            force.addException(excludeatom, excludeatom2, 0.0, 0.1, 0.0)
-            for atom2 in atom.dihedral_partners:
-                if atom2.idx <= atom.idx: continue
-                if ((atom.idx, atom2.idx) in excluded_atom_pairs):
-                    continue
-                force.addException(atom.idx, atom2.idx, 0.0, 0.1, 0.0)
+        # Exclude 1-2 and 1-3 pairs as well as the lonepair/Drude attached onto them
+        if nbxmod > 1:
+            for ia1, ia2 in self.pair_12_list:
+                for excludeatom in [ia1]+parent_exclude_list[ia1]:
+                    for excludeatom2 in [ia2]+parent_exclude_list[ia2]:
+                        force.addException(excludeatom, excludeatom2, 0.0, 0.1, 0.0)
+        if nbxmod > 2:
+            for ia1, ia3 in self.pair_13_list:
+                for excludeatom in [ia1]+parent_exclude_list[ia1]:
+                    for excludeatom2 in [ia3]+parent_exclude_list[ia3]:
+                        force.addException(excludeatom, excludeatom2, 0.0, 0.1, 0.0)
         system.addForce(force)
 
         # Add Drude particles (Drude force)
         if has_drude_particle:
             if verbose: print('Adding Drude force and Thole screening...')
             drudeforce = mm.DrudeForce()
-            drudeforce.setForceGroup(7)
+            drudeforce.setForceGroup(self.DRUDE_FORCE_GROUP)
             for pair in self.drudepair_list:
                 parentatom=pair[0]
                 drudeatom=pair[1]
@@ -1425,25 +1455,28 @@ class CharmmPsfFile(object):
             particleMap = {}
             for i in range(drudeforce.getNumParticles()):
                 particleMap[drudeforce.getParticleParameters(i)[0]] = i
-            
-            for bond in self.bond_list:
-                alpha1 = self.drudeconsts_list[bond.atom1.idx][0]
-                alpha2 = self.drudeconsts_list[bond.atom2.idx][0] 
+
+            # Apply thole screening for 1-2 and 1-3 pairs
+            for ia1, ia2 in self.pair_12_list + self.pair_13_list:
+                alpha1 = self.drudeconsts_list[ia1][0]
+                alpha2 = self.drudeconsts_list[ia2][0]
                 if abs(alpha1) > TINY and abs(alpha2) > TINY: # both are Drude parent atoms
-                    thole1 = self.drudeconsts_list[bond.atom1.idx][1]
-                    thole2 = self.drudeconsts_list[bond.atom2.idx][1]
-                    drude1 = bond.atom1.idx + 1 # CHARMM psf has hard-coded rule that the Drude is next to its parent
-                    drude2 = bond.atom2.idx + 1
+                    thole1 = self.drudeconsts_list[ia1][1]
+                    thole2 = self.drudeconsts_list[ia2][1]
+                    drude1 = ia1 + 1 # CHARMM psf has hard-coded rule that the Drude is next to its parent
+                    drude2 = ia2 + 1
                     drudeforce.addScreenedPair(particleMap[drude1], particleMap[drude2], thole1+thole2)
-            for ang in self.angle_list:
-                alpha1 = self.drudeconsts_list[ang.atom1.idx][0]
-                alpha2 = self.drudeconsts_list[ang.atom3.idx][0] 
-                if abs(alpha1) > TINY and abs(alpha2) > TINY: # both are Drude parent atoms
-                    thole1 = self.drudeconsts_list[ang.atom1.idx][1]
-                    thole2 = self.drudeconsts_list[ang.atom3.idx][1]
-                    drude1 = ang.atom1.idx + 1 # CHARMM psf has hard-coded rule that the Drude is next to its parent
-                    drude2 = ang.atom3.idx + 1
-                    drudeforce.addScreenedPair(particleMap[drude1], particleMap[drude2], thole1+thole2)
+
+            # Set the masses of Drude particles.
+            if not u.is_quantity(drudeMass):
+                drudeMass *= u.dalton
+            for i in range(drudeforce.getNumParticles()):
+                params = drudeforce.getParticleParameters(i)
+                particle = params[0]
+                parent = params[1]
+                transferMass = drudeMass-system.getParticleMass(particle)
+                system.setParticleMass(particle, drudeMass)
+                system.setParticleMass(parent, system.getParticleMass(parent)-transferMass)
 
         # If we needed a CustomNonbondedForce, map all of the exceptions from
         # the NonbondedForce to the CustomNonbondedForce

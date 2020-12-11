@@ -9,7 +9,7 @@
  * Biological Structures at Stanford, funded under the NIH Roadmap for        *
  * Medical Research, grant U54 GM072970. See https://simtk.org.               *
  *                                                                            *
- * Portions copyright (c) 2008-2015 Stanford University and the Authors.      *
+ * Portions copyright (c) 2008-2020 Stanford University and the Authors.      *
  * Authors: Peter Eastman                                                     *
  * Contributors:                                                              *
  *                                                                            *
@@ -34,6 +34,7 @@
 
 #include "State.h"
 #include "Vec3.h"
+#include "openmm/serialization/SerializationNode.h"
 #include <iosfwd>
 #include <map>
 #include <vector>
@@ -43,11 +44,12 @@ namespace OpenMM {
 
 class Context;
 class ContextImpl;
+class System;
 
 /**
  * An Integrator defines a method for simulating a System by integrating the equations of motion.
  * This is an abstract class.  Subclasses define particular integration methods.
- * 
+ *
  * Each Integrator object is bound to a particular Context which it integrates.  This connection
  * is specified by passing the Integrator as an argument to the constructor of the Context.
  */
@@ -80,10 +82,22 @@ public:
     virtual void setConstraintTolerance(double tol);
     /**
      * Advance a simulation through time by taking a series of time steps.
-     * 
+     *
      * @param steps   the number of time steps to take
      */
     virtual void step(int steps) = 0;
+    /**
+     * Get which force groups to use for integration.  By default, all force groups
+     * are included.  This is interpreted as a set of bit flags: the forces from group i
+     * will be included if (groups&(1<<i)) != 0.
+     */
+    virtual int getIntegrationForceGroups() const;
+    /**
+     * Set which force groups to use for integration.  By default, all force groups
+     * are included.  This is interpreted as a set of bit flags: the forces from group i
+     * will be included if (groups&(1<<i)) != 0.
+     */
+    virtual void setIntegrationForceGroups(int groups);
 protected:
     friend class Context;
     friend class ContextImpl;
@@ -112,7 +126,7 @@ protected:
      * information.  This is <i>only</i> called when the user modifies information using methods of the Context
      * object.  It is <i>not</i> called when a ForceImpl object modifies state information in its updateContextState()
      * method (unless the ForceImpl calls a Context method to perform the modification).
-     * 
+     *
      * @param changed     this specifies what aspect of the Context was changed
      */
     virtual void stateChanged(State::DataType changed) {
@@ -121,8 +135,36 @@ protected:
      * Compute the kinetic energy of the system at the current time.  This may be different from simply
      * mv<sup>2</sup>/2.  For example, a leapfrog integrator will store velocities offset by half a step,
      * but the kinetic energy should be computed at the current time, not delayed by half a step.
+     *
+     * If kineticEnergyRequiresForce() returns true, this method can assume that valid forces
+     * have already been computed.
      */
     virtual double computeKineticEnergy() = 0;
+    /**
+     * Get whether computeKineticEnergy() expects forces to have been computed.  The default
+     * implementation returns true to be safe.  Non-leapfrog integrators can override this to
+     * return false, which makes calling getState() to query the energy less expensive.
+     */
+    virtual bool kineticEnergyRequiresForce() const {
+        return true;
+    }
+    /**
+     * Return a list of velocities normally distributed around a target temperature.  This may be
+     * overridden by Drude integrators to ensure that Drude pairs have their center of mass velocity
+     * assigned as a single entity, rather than treating both particles as being independent.
+     *
+     * @param system the system whose velocities are to be initialized.
+     * @param temperature the target temperature in Kelvin.
+     * @param randomSeed the random number seed to use when selecting velocities
+     */
+    virtual std::vector<Vec3> getVelocitiesForTemperature(const System &system, double temperature, int randomSeed) const;
+    /**
+     * Get the time interval by which velocities are offset from positions.  This is used to
+     * adjust velocities when setVelocitiesToTemperature() is called on a Context.
+     */
+    virtual double getVelocityTimeOffset() const {
+        return 0.0;
+    }
     /**
      * This is called while writing checkpoints.  It gives the integrator a chance to write
      * its own data.  The default implementation does nothing.
@@ -135,8 +177,24 @@ protected:
      */
     virtual void loadCheckpoint(std::istream& stream) {
     }
+    /**
+     * This is called while creating a State.  The Integrator should store the values
+     * of all time-varying parameters into the SerializationNode so they can be saved
+     * as part of the state.
+     */
+    virtual void serializeParameters(SerializationNode& node) const {
+    }
+    /**
+     * This is called when loading a previously saved State.  The Integrator should
+     * load the values of all time-varying parameters from the SerializationNode.  If
+     * the node contains parameters that are not defined for this Integrator, it should
+     * throw an exception.
+     */
+    virtual void deserializeParameters(const SerializationNode& node) {
+    }
 private:
     double stepSize, constraintTol;
+    int forceGroups;
 };
 
 } // namespace OpenMM
